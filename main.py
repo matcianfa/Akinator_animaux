@@ -195,7 +195,7 @@ def sauvegarde_csv(animaux, compteur_apparitions, questions, donnees):
 
 # Fonctions de calcul (identiques à votre code)
 def donner_proba_animaux_sachant_r(r, donnees, proba_animaux):
-    numerateurs = (1 - abs(r - donnees)) * proba_animaux
+    numerateurs = np.maximum(1 - abs(r - donnees), 0.05) * proba_animaux # On met un plancher pour éviter 0 qui absorbe trop et ne permet plus de récupérer un animal
     denominateur = np.sum(numerateurs, axis=1)
     denominateur[denominateur == 0] = 1
     return np.divide(numerateurs, denominateur.reshape(-1, 1)), denominateur
@@ -682,6 +682,10 @@ def answer_question(request: AnswerRequest):
         session["donnees"],
         session["proba_animaux"]
     )[0][i_question]
+
+    # On rajoute un peu de bruit pour ne pas faire totalement disparaitre les animaux de faible probabilité (au cas ou)
+    session["proba_animaux"] += 1e-6
+    session["proba_animaux"] /= np.sum(session["proba_animaux"])
 
     # Vérifier si on a trouvé
     indice_meilleur_animal, proba = recherche_bonne_reponse(session["proba_animaux"], session["animaux"])
