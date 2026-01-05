@@ -431,16 +431,14 @@ def get_interface():
             }
 
             .logo {
-                width: 120px;
+                width: 200px;
                 margin-bottom: 20px;
-                filter: drop-shadow(0 10px 20px rgba(102,126,234,0.4));
             }
         </style>
     </head>
     <body>
         <div class="container">
             <img src="/static/image_akinator.png" alt="Akinator" class="logo">
-            <h1>Akinator</h1>
             <p class="subtitle">Pense à un animal, je vais le deviner !</p>
 
             <div class="welcome-screen" id="welcomeScreen">
