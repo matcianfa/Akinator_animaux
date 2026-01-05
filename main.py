@@ -427,10 +427,17 @@ def get_interface():
             .success-message.active {
                 display: block;
             }
+
+            .logo {
+                width: 120px;
+                margin-bottom: 20px;
+                filter: drop-shadow(0 10px 20px rgba(102,126,234,0.4));
+            }
         </style>
     </head>
     <body>
         <div class="container">
+            <img src="image_akinator.png" alt="Akinator" class="logo">
             <h1>🔮 Akinator</h1>
             <p class="subtitle">Pense à un animal, je vais le deviner !</p>
 
