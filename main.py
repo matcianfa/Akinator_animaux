@@ -5,6 +5,7 @@ API FastAPI pour Akinator avec Google Drive
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, Dict
 import numpy as np
@@ -31,6 +32,7 @@ GDRIVE_FILE_NAME = "akinator_animaux.csv"
 sessions: Dict[str, dict] = {}
 
 app = FastAPI(title="Akinator API")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -437,8 +439,8 @@ def get_interface():
     </head>
     <body>
         <div class="container">
-            <img src="image_akinator.png" alt="Akinator" class="logo">
-            <h1>🔮 Akinator</h1>
+            <img src="/static/image_akinator.png" alt="Akinator" class="logo">
+            <h1>Akinator</h1>
             <p class="subtitle">Pense à un animal, je vais le deviner !</p>
 
             <div class="welcome-screen" id="welcomeScreen">
