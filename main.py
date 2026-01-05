@@ -1,5 +1,5 @@
 """
-API FastAPI pour Akinator avec interface HTML
+API FastAPI pour Akinator avec PostgreSQL
 """
 
 from fastapi import FastAPI, HTTPException
@@ -8,22 +8,55 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, Dict
 import numpy as np
-import csv
-from pathlib import Path
+import os
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 import uuid
+import json
 
-# Constantes (identiques à votre code)
-NOM_CSV = "akinator_animaux.csv"
+# Constantes
 REPONSES_POSSIBLES = ["Oui", "Plutôt oui", "Je ne sais pas", "Plutôt non", "Non"]
 VALEURS_REPONSES = [1, 0.75, 0.5, 0.25, 0]
 SEUIL = 0.3
+
+# Configuration PostgreSQL
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/akinator")
+# Render utilise postgres:// mais SQLAlchemy a besoin de postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Modèles de base de données
+class Animal(Base):
+    __tablename__ = "animaux"
+    id = Column(Integer, primary_key=True, index=True)
+    nom = Column(String, unique=True, nullable=False)
+    compteur_apparitions = Column(Integer, default=0)
+
+class Question(Base):
+    __tablename__ = "questions"
+    id = Column(Integer, primary_key=True, index=True)
+    texte = Column(Text, nullable=False)
+
+class Donnee(Base):
+    __tablename__ = "donnees"
+    id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer, nullable=False)
+    animal_id = Column(Integer, nullable=False)
+    valeur = Column(Float, nullable=False)
+
+# Créer les tables
+Base.metadata.create_all(bind=engine)
 
 # Stockage des sessions en mémoire
 sessions: Dict[str, dict] = {}
 
 app = FastAPI(title="Akinator API")
 
-# CORS pour permettre les appels depuis un frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,7 +74,7 @@ class SessionResponse(BaseModel):
 
 class AnswerRequest(BaseModel):
     session_id: str
-    reponse: int  # 0-4 pour les 5 réponses possibles
+    reponse: int
 
 class GuessResponse(BaseModel):
     animal: str
@@ -54,6 +87,139 @@ class ConfirmRequest(BaseModel):
     session_id: str
     correct: bool
 
+# Fonctions de base de données
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def charger_donnees_db():
+    """Charge les données depuis PostgreSQL"""
+    db = SessionLocal()
+    try:
+        # Récupérer les animaux
+        animaux_db = db.query(Animal).all()
+        if not animaux_db:
+            raise HTTPException(status_code=500, detail="Aucun animal dans la base de données")
+
+        animaux = [a.nom for a in animaux_db]
+        animal_ids = {a.id: idx for idx, a in enumerate(animaux_db)}
+        compteur_apparitions = [a.compteur_apparitions for a in animaux_db]
+
+        # Récupérer les questions
+        questions_db = db.query(Question).all()
+        if not questions_db:
+            raise HTTPException(status_code=500, detail="Aucune question dans la base de données")
+
+        questions = [q.texte for q in questions_db]
+        question_ids = {q.id: idx for idx, q in enumerate(questions_db)}
+
+        # Créer la matrice de données
+        donnees = np.zeros((len(questions), len(animaux)))
+        donnees_db = db.query(Donnee).all()
+
+        for d in donnees_db:
+            if d.question_id in question_ids and d.animal_id in animal_ids:
+                i = question_ids[d.question_id]
+                j = animal_ids[d.animal_id]
+                donnees[i][j] = d.valeur
+
+        return animaux, compteur_apparitions, questions, donnees, animaux_db, questions_db
+    finally:
+        db.close()
+
+def sauvegarder_donnees_db(animaux_db, questions_db, compteur_apparitions, donnees):
+    """Sauvegarde les données dans PostgreSQL"""
+    db = SessionLocal()
+    try:
+        # Mettre à jour les compteurs d'apparitions
+        for idx, animal in enumerate(animaux_db):
+            animal.compteur_apparitions = compteur_apparitions[idx]
+
+        # Mettre à jour les valeurs des données
+        for i, question in enumerate(questions_db):
+            for j, animal in enumerate(animaux_db):
+                # Chercher ou créer la donnée
+                donnee = db.query(Donnee).filter(
+                    Donnee.question_id == question.id,
+                    Donnee.animal_id == animal.id
+                ).first()
+
+                if donnee:
+                    donnee.valeur = float(donnees[i][j])
+                else:
+                    nouvelle_donnee = Donnee(
+                        question_id=question.id,
+                        animal_id=animal.id,
+                        valeur=float(donnees[i][j])
+                    )
+                    db.add(nouvelle_donnee)
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+def initialiser_base_depuis_csv():
+    """Fonction pour initialiser la DB depuis un CSV (à exécuter une seule fois)"""
+    import csv
+    db = SessionLocal()
+    try:
+        # Vérifier si la DB est déjà initialisée
+        if db.query(Animal).count() > 0:
+            print("Base de données déjà initialisée")
+            return
+
+        NOM_CSV = "akinator_animaux.csv"
+        with open(NOM_CSV, 'r', encoding='utf-8') as fichier:
+            reader = csv.reader(fichier)
+
+            # Lire les animaux
+            animaux_noms = next(reader)[1:]
+            animaux_db = []
+            for nom in animaux_noms:
+                animal = Animal(nom=nom, compteur_apparitions=0)
+                db.add(animal)
+                animaux_db.append(animal)
+
+            db.flush()  # Pour obtenir les IDs
+
+            # Lire les compteurs
+            compteurs = [int(val) for val in next(reader)[1:]]
+            for idx, animal in enumerate(animaux_db):
+                animal.compteur_apparitions = compteurs[idx]
+
+            # Lire les questions et données
+            for ligne in reader:
+                question_texte = ligne[0]
+                valeurs = [float(val) for val in ligne[1:]]
+
+                question = Question(texte=question_texte)
+                db.add(question)
+                db.flush()  # Pour obtenir l'ID
+
+                for idx, valeur in enumerate(valeurs):
+                    donnee = Donnee(
+                        question_id=question.id,
+                        animal_id=animaux_db[idx].id,
+                        valeur=valeur
+                    )
+                    db.add(donnee)
+
+            db.commit()
+            print(f"Base de données initialisée avec {len(animaux_db)} animaux")
+    except FileNotFoundError:
+        print("Fichier CSV non trouvé - la base reste vide")
+    except Exception as e:
+        db.rollback()
+        print(f"Erreur lors de l'initialisation : {e}")
+    finally:
+        db.close()
+
 # Fonctions de votre code (adaptées)
 def donner_proba_animaux_sachant_r(r, donnees, proba_animaux):
     numerateurs = (1 - abs(r - donnees)) * proba_animaux
@@ -65,7 +231,7 @@ def calcul_IM(donnees, proba_animaux):
     IM = 0
     for r in VALEURS_REPONSES:
         proba_animaux_sachant_r, p_r = donner_proba_animaux_sachant_r(r, donnees, proba_animaux)
-        h_r = np.sum(np.where(proba_animaux_sachant_r > 0, 
+        h_r = np.sum(np.where(proba_animaux_sachant_r > 0,
                               -proba_animaux_sachant_r * np.log2(proba_animaux_sachant_r), 0), axis=1)
         IM += h_r * p_r
     return IM
@@ -88,30 +254,6 @@ def actualisation_valeurs_theoriques(donnees, indice_animal, reponses_donnees, a
     for question, reponse in reponses_donnees.items():
         donnees[question, indice_animal] += alpha * (VALEURS_REPONSES[reponse] - donnees[question, indice_animal])
 
-def sauvegarde_csv(animaux, compteur_apparitions, questions, donnees):
-    with open(NOM_CSV, 'w', newline='', encoding='utf-8') as fichier:
-        writer = csv.writer(fichier)
-        writer.writerow(["Question"] + animaux)
-        writer.writerow(["Compteur d'apparitions"] + compteur_apparitions)
-        for i in range(len(questions)):
-            writer.writerow([questions[i]] + [f"{valeur:.3f}" for valeur in donnees[i]])
-
-def charger_donnees():
-    try:
-        with open(NOM_CSV, 'r', encoding='utf-8') as fichier:
-            reader = csv.reader(fichier)
-            animaux = next(reader)[1:]
-            compteur_apparitions = [int(val) for val in next(reader)[1:]]
-            questions = []
-            donnees = []
-            for ligne in reader:
-                questions.append(ligne[0])
-                donnees.append([float(val) for val in ligne[1:]])
-            donnees = np.asarray(donnees)
-            return animaux, compteur_apparitions, questions, donnees
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail=f"Fichier '{NOM_CSV}' non trouvé")
-
 # Route pour l'interface HTML
 @app.get("/", response_class=HTMLResponse)
 def get_interface():
@@ -128,7 +270,7 @@ def get_interface():
                 padding: 0;
                 box-sizing: border-box;
             }
-            
+
             body {
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -138,7 +280,7 @@ def get_interface():
                 align-items: center;
                 padding: 20px;
             }
-            
+
             .container {
                 background: white;
                 border-radius: 20px;
@@ -148,19 +290,19 @@ def get_interface():
                 padding: 40px;
                 text-align: center;
             }
-            
+
             h1 {
                 color: #667eea;
                 margin-bottom: 10px;
                 font-size: 2.5em;
             }
-            
+
             .subtitle {
                 color: #666;
                 margin-bottom: 30px;
                 font-size: 1.1em;
             }
-            
+
             .question-container {
                 background: #f8f9ff;
                 border-radius: 15px;
@@ -168,31 +310,31 @@ def get_interface():
                 margin: 30px 0;
                 display: none;
             }
-            
+
             .question-container.active {
                 display: block;
             }
-            
+
             .question-number {
                 color: #764ba2;
                 font-weight: bold;
                 margin-bottom: 15px;
                 font-size: 1.1em;
             }
-            
+
             .question-text {
                 font-size: 1.4em;
                 color: #333;
                 margin-bottom: 30px;
                 font-weight: 500;
             }
-            
+
             .buttons-container {
                 display: flex;
                 flex-direction: column;
                 gap: 12px;
             }
-            
+
             button {
                 padding: 15px 30px;
                 font-size: 1.1em;
@@ -203,31 +345,31 @@ def get_interface():
                 font-weight: 600;
                 color: white;
             }
-            
+
             .btn-start {
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 font-size: 1.3em;
                 padding: 20px 40px;
             }
-            
+
             .btn-start:hover {
                 transform: translateY(-2px);
                 box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
             }
-            
+
             .btn-answer {
                 background: #667eea;
             }
-            
+
             .btn-answer:hover {
                 background: #764ba2;
                 transform: translateY(-2px);
             }
-            
+
             .btn-answer:active {
                 transform: translateY(0);
             }
-            
+
             .guess-container {
                 background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
                 color: white;
@@ -236,55 +378,55 @@ def get_interface():
                 margin: 30px 0;
                 display: none;
             }
-            
+
             .guess-container.active {
                 display: block;
             }
-            
+
             .guess-title {
                 font-size: 1.5em;
                 margin-bottom: 20px;
             }
-            
+
             .guess-animal {
                 font-size: 2em;
                 font-weight: bold;
                 margin: 20px 0;
             }
-            
+
             .guess-probability {
                 font-size: 1.2em;
                 opacity: 0.9;
                 margin-bottom: 30px;
             }
-            
+
             .btn-confirm {
                 background: white;
                 color: #f5576c;
                 margin: 5px;
             }
-            
+
             .btn-confirm:hover {
                 background: #f0f0f0;
             }
-            
+
             .welcome-screen {
                 display: block;
             }
-            
+
             .welcome-screen.hidden {
                 display: none;
             }
-            
+
             .loading {
                 display: none;
                 margin: 20px 0;
             }
-            
+
             .loading.active {
                 display: block;
             }
-            
+
             .spinner {
                 border: 4px solid #f3f3f3;
                 border-top: 4px solid #667eea;
@@ -294,12 +436,12 @@ def get_interface():
                 animation: spin 1s linear infinite;
                 margin: 0 auto;
             }
-            
+
             @keyframes spin {
                 0% { transform: rotate(0deg); }
                 100% { transform: rotate(360deg); }
             }
-            
+
             .success-message {
                 background: #4caf50;
                 color: white;
@@ -308,7 +450,7 @@ def get_interface():
                 margin: 20px 0;
                 display: none;
             }
-            
+
             .success-message.active {
                 display: block;
             }
@@ -318,25 +460,25 @@ def get_interface():
         <div class="container">
             <h1>🔮 Akinator</h1>
             <p class="subtitle">Pense à un animal, je vais le deviner !</p>
-            
+
             <div class="welcome-screen" id="welcomeScreen">
                 <p style="margin: 30px 0; color: #666; font-size: 1.1em;">
                     Je vais te poser quelques questions pour deviner l'animal auquel tu penses.
                 </p>
                 <button class="btn-start" onclick="startGame()">Commencer</button>
             </div>
-            
+
             <div class="loading" id="loading">
                 <div class="spinner"></div>
                 <p style="margin-top: 15px; color: #666;">Chargement...</p>
             </div>
-            
+
             <div class="question-container" id="questionContainer">
                 <div class="question-number" id="questionNumber"></div>
                 <div class="question-text" id="questionText"></div>
                 <div class="buttons-container" id="buttonsContainer"></div>
             </div>
-            
+
             <div class="guess-container" id="guessContainer">
                 <div class="guess-title">Je pense à...</div>
                 <div class="guess-animal" id="guessAnimal"></div>
@@ -346,42 +488,42 @@ def get_interface():
                     <button class="btn-confirm" onclick="confirmGuess(false)">✗ Non, continue</button>
                 </div>
             </div>
-            
+
             <div class="success-message" id="successMessage">
                 🎉 Super ! J'ai trouvé ! Merci d'avoir joué !
             </div>
         </div>
-        
+
         <script>
             let sessionId = null;
-            
+
             async function startGame() {
                 showLoading();
                 hideWelcome();
-                
+
                 try {
                     const response = await fetch('/start', {
                         method: 'POST'
                     });
                     const data = await response.json();
-                    
+
                     sessionId = data.session_id;
                     displayQuestion(data.question, data.question_number, data.reponses_possibles);
                 } catch (error) {
                     alert('Erreur lors du démarrage du jeu : ' + error);
                 }
             }
-            
+
             function displayQuestion(question, number, reponses) {
                 hideLoading();
                 hideGuess();
-                
+
                 document.getElementById('questionNumber').textContent = `Question n°${number}`;
                 document.getElementById('questionText').textContent = question;
-                
+
                 const buttonsContainer = document.getElementById('buttonsContainer');
                 buttonsContainer.innerHTML = '';
-                
+
                 reponses.forEach((reponse, index) => {
                     const button = document.createElement('button');
                     button.className = 'btn-answer';
@@ -389,14 +531,14 @@ def get_interface():
                     button.onclick = () => answerQuestion(index);
                     buttonsContainer.appendChild(button);
                 });
-                
+
                 showQuestion();
             }
-            
+
             async function answerQuestion(reponseIndex) {
                 showLoading();
                 hideQuestion();
-                
+
                 try {
                     const response = await fetch('/answer', {
                         method: 'POST',
@@ -409,7 +551,7 @@ def get_interface():
                         })
                     });
                     const data = await response.json();
-                    
+
                     if (data.is_final) {
                         displayGuess(data.animal, data.probabilite);
                     } else {
@@ -419,21 +561,21 @@ def get_interface():
                     alert('Erreur : ' + error);
                 }
             }
-            
+
             function displayGuess(animal, probabilite) {
                 hideLoading();
                 hideQuestion();
-                
+
                 document.getElementById('guessAnimal').textContent = animal;
                 document.getElementById('guessProbability').textContent = `Probabilité : ${(probabilite * 100).toFixed(1)}%`;
-                
+
                 showGuess();
             }
-            
+
             async function confirmGuess(correct) {
                 showLoading();
                 hideGuess();
-                
+
                 try {
                     const response = await fetch('/confirm', {
                         method: 'POST',
@@ -446,11 +588,10 @@ def get_interface():
                         })
                     });
                     const data = await response.json();
-                    
+
                     hideLoading();
-                    
+
                     if (data.message) {
-                        // Victoire !
                         showSuccess();
                         setTimeout(() => {
                             location.reload();
@@ -464,39 +605,39 @@ def get_interface():
                     alert('Erreur : ' + error);
                 }
             }
-            
+
             function showWelcome() {
                 document.getElementById('welcomeScreen').classList.remove('hidden');
             }
-            
+
             function hideWelcome() {
                 document.getElementById('welcomeScreen').classList.add('hidden');
             }
-            
+
             function showLoading() {
                 document.getElementById('loading').classList.add('active');
             }
-            
+
             function hideLoading() {
                 document.getElementById('loading').classList.remove('active');
             }
-            
+
             function showQuestion() {
                 document.getElementById('questionContainer').classList.add('active');
             }
-            
+
             function hideQuestion() {
                 document.getElementById('questionContainer').classList.remove('active');
             }
-            
+
             function showGuess() {
                 document.getElementById('guessContainer').classList.add('active');
             }
-            
+
             function hideGuess() {
                 document.getElementById('guessContainer').classList.remove('active');
             }
-            
+
             function showSuccess() {
                 document.getElementById('successMessage').classList.add('active');
             }
@@ -510,14 +651,18 @@ def get_interface():
 def start_session():
     """Démarre une nouvelle session Akinator"""
     session_id = str(uuid.uuid4())
-    
-    # Charger les données
-    animaux, compteur_apparitions, questions, donnees = charger_donnees()
-    
+
+    # Charger les données depuis PostgreSQL
+    animaux, compteur_apparitions, questions, donnees, animaux_db, questions_db = charger_donnees_db()
+
     # Initialiser les probabilités
     apparitions_totales = sum(compteur_apparitions)
+    if apparitions_totales == 0:
+        apparitions_totales = len(animaux)
+        compteur_apparitions = [1] * len(animaux)
+
     proba_animaux = np.asarray([val / apparitions_totales for val in compteur_apparitions])
-    
+
     # Créer la session
     sessions[session_id] = {
         "animaux": animaux,
@@ -527,18 +672,20 @@ def start_session():
         "proba_animaux": proba_animaux,
         "reponses_donnees": {},
         "questions_pas_encore_posees": np.ones(len(questions), dtype=bool),
-        "compteur_question": 0
+        "compteur_question": 0,
+        "animaux_db": animaux_db,
+        "questions_db": questions_db
     }
-    
+
     # Choisir la première question
     i_question = choix_meilleure_question(donnees, proba_animaux, sessions[session_id]["questions_pas_encore_posees"])
-    
+
     if i_question is None:
         raise HTTPException(status_code=500, detail="Aucune question disponible")
-    
+
     sessions[session_id]["question_courante"] = i_question
     sessions[session_id]["compteur_question"] = 1
-    
+
     return SessionResponse(
         session_id=session_id,
         question=questions[i_question],
@@ -551,27 +698,27 @@ def answer_question(request: AnswerRequest):
     """Répond à une question et obtient la suivante ou la réponse finale"""
     if request.session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session non trouvée")
-    
+
     session = sessions[request.session_id]
     i_question = session["question_courante"]
-    
+
     if not (0 <= request.reponse < len(VALEURS_REPONSES)):
         raise HTTPException(status_code=400, detail="Réponse invalide")
-    
+
     # Enregistrer la réponse
     session["reponses_donnees"][i_question] = request.reponse
     session["questions_pas_encore_posees"][i_question] = False
-    
+
     # Mettre à jour les probabilités
     session["proba_animaux"] = donner_proba_animaux_sachant_r(
         VALEURS_REPONSES[request.reponse],
         session["donnees"],
         session["proba_animaux"]
     )[0][i_question]
-    
+
     # Vérifier si on a trouvé
     indice_meilleur_animal, proba = recherche_bonne_reponse(session["proba_animaux"], session["animaux"])
-    
+
     if indice_meilleur_animal is not None:
         session["animal_propose"] = indice_meilleur_animal
         return GuessResponse(
@@ -579,14 +726,14 @@ def answer_question(request: AnswerRequest):
             probabilite=float(proba),
             is_final=True
         )
-    
+
     # Choisir la prochaine question
     i_question = choix_meilleure_question(
         session["donnees"],
         session["proba_animaux"],
         session["questions_pas_encore_posees"]
     )
-    
+
     if i_question is None:
         i_max = np.argmax(session["proba_animaux"])
         session["animal_propose"] = i_max
@@ -595,10 +742,10 @@ def answer_question(request: AnswerRequest):
             probabilite=float(session["proba_animaux"][i_max]),
             is_final=True
         )
-    
+
     session["question_courante"] = i_question
     session["compteur_question"] += 1
-    
+
     return GuessResponse(
         animal="",
         probabilite=0.0,
@@ -612,12 +759,12 @@ def confirm_guess(request: ConfirmRequest):
     """Confirme si la réponse était correcte"""
     if request.session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session non trouvée")
-    
+
     session = sessions[request.session_id]
-    
+
     if "animal_propose" not in session:
         raise HTTPException(status_code=400, detail="Aucun animal n'a été proposé")
-    
+
     if request.correct:
         indice_animal = session["animal_propose"]
         session["compteur_apparitions"][indice_animal] += 1
@@ -626,25 +773,28 @@ def confirm_guess(request: ConfirmRequest):
             indice_animal,
             session["reponses_donnees"]
         )
-        sauvegarde_csv(
-            session["animaux"],
+
+        # Sauvegarder dans PostgreSQL
+        sauvegarder_donnees_db(
+            session["animaux_db"],
+            session["questions_db"],
             session["compteur_apparitions"],
-            session["questions"],
             session["donnees"]
         )
+
         del sessions[request.session_id]
         return {"message": "Parfait ! Merci d'avoir joué !"}
     else:
         session["proba_animaux"][session["animal_propose"]] = 0
         del session["animal_propose"]
-        
+
         # Continuer avec une nouvelle question
         i_question = choix_meilleure_question(
             session["donnees"],
             session["proba_animaux"],
             session["questions_pas_encore_posees"]
         )
-        
+
         if i_question is None:
             i_max = np.argmax(session["proba_animaux"])
             return GuessResponse(
@@ -652,10 +802,10 @@ def confirm_guess(request: ConfirmRequest):
                 probabilite=float(session["proba_animaux"][i_max]),
                 is_final=True
             )
-        
+
         session["question_courante"] = i_question
         session["compteur_question"] += 1
-        
+
         return GuessResponse(
             animal="",
             probabilite=0.0,
@@ -664,6 +814,20 @@ def confirm_guess(request: ConfirmRequest):
             question_number=session["compteur_question"]
         )
 
+@app.get("/init-db")
+def init_database():
+    """Route pour initialiser la base de données depuis le CSV"""
+    try:
+        initialiser_base_depuis_csv()
+        return {"message": "Base de données initialisée avec succès"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Initialiser la DB au démarrage si elle est vide
+    try:
+        initialiser_base_depuis_csv()
+    except:
+        pass
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
