@@ -1,5 +1,5 @@
 """
-API FastAPI pour Akinator avec PostgreSQL
+API FastAPI pour Akinator avec Google Drive
 """
 
 from fastapi import FastAPI, HTTPException
@@ -8,49 +8,24 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, Dict
 import numpy as np
+import csv
+import io
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-import uuid
 import json
+import uuid
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 # Constantes
 REPONSES_POSSIBLES = ["Oui", "Plutôt oui", "Je ne sais pas", "Plutôt non", "Non"]
 VALEURS_REPONSES = [1, 0.75, 0.5, 0.25, 0]
 SEUIL = 0.3
 
-# Configuration PostgreSQL
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/akinator")
-# Render utilise postgres:// mais SQLAlchemy a besoin de postgresql://
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-# Modèles de base de données
-class Animal(Base):
-    __tablename__ = "animaux"
-    id = Column(Integer, primary_key=True, index=True)
-    nom = Column(String, unique=True, nullable=False)
-    compteur_apparitions = Column(Integer, default=0)
-
-class Question(Base):
-    __tablename__ = "questions"
-    id = Column(Integer, primary_key=True, index=True)
-    texte = Column(Text, nullable=False)
-
-class Donnee(Base):
-    __tablename__ = "donnees"
-    id = Column(Integer, primary_key=True, index=True)
-    question_id = Column(Integer, nullable=False)
-    animal_id = Column(Integer, nullable=False)
-    valeur = Column(Float, nullable=False)
-
-# Créer les tables
-Base.metadata.create_all(bind=engine)
+# Configuration Google Drive
+SCOPES = ['https://www.googleapis.com/auth/drive']
+# Le nom du fichier CSV sur Google Drive
+GDRIVE_FILE_NAME = "akinator_animaux.csv"
 
 # Stockage des sessions en mémoire
 sessions: Dict[str, dict] = {}
@@ -87,140 +62,138 @@ class ConfirmRequest(BaseModel):
     session_id: str
     correct: bool
 
-# Fonctions de base de données
-def get_db():
-    db = SessionLocal()
+# Fonctions Google Drive
+def get_drive_service():
+    """Initialise le service Google Drive"""
     try:
-        yield db
-    finally:
-        db.close()
+        # Récupérer les credentials depuis la variable d'environnement
+        creds_json = os.getenv('GOOGLE_CREDENTIALS')
+        if not creds_json:
+            raise ValueError("GOOGLE_CREDENTIALS non définie")
 
-def charger_donnees_db():
-    """Charge les données depuis PostgreSQL"""
-    db = SessionLocal()
-    try:
-        # Récupérer les animaux
-        animaux_db = db.query(Animal).all()
-        if not animaux_db:
-            raise HTTPException(status_code=500, detail="Aucun animal dans la base de données")
+        creds_dict = json.loads(creds_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            creds_dict, scopes=SCOPES
+        )
 
-        animaux = [a.nom for a in animaux_db]
-        animal_ids = {a.id: idx for idx, a in enumerate(animaux_db)}
-        compteur_apparitions = [a.compteur_apparitions for a in animaux_db]
-
-        # Récupérer les questions
-        questions_db = db.query(Question).all()
-        if not questions_db:
-            raise HTTPException(status_code=500, detail="Aucune question dans la base de données")
-
-        questions = [q.texte for q in questions_db]
-        question_ids = {q.id: idx for idx, q in enumerate(questions_db)}
-
-        # Créer la matrice de données
-        donnees = np.zeros((len(questions), len(animaux)))
-        donnees_db = db.query(Donnee).all()
-
-        for d in donnees_db:
-            if d.question_id in question_ids and d.animal_id in animal_ids:
-                i = question_ids[d.question_id]
-                j = animal_ids[d.animal_id]
-                donnees[i][j] = d.valeur
-
-        return animaux, compteur_apparitions, questions, donnees, animaux_db, questions_db
-    finally:
-        db.close()
-
-def sauvegarder_donnees_db(animaux_db, questions_db, compteur_apparitions, donnees):
-    """Sauvegarde les données dans PostgreSQL"""
-    db = SessionLocal()
-    try:
-        # Mettre à jour les compteurs d'apparitions
-        for idx, animal in enumerate(animaux_db):
-            animal.compteur_apparitions = compteur_apparitions[idx]
-
-        # Mettre à jour les valeurs des données
-        for i, question in enumerate(questions_db):
-            for j, animal in enumerate(animaux_db):
-                # Chercher ou créer la donnée
-                donnee = db.query(Donnee).filter(
-                    Donnee.question_id == question.id,
-                    Donnee.animal_id == animal.id
-                ).first()
-
-                if donnee:
-                    donnee.valeur = float(donnees[i][j])
-                else:
-                    nouvelle_donnee = Donnee(
-                        question_id=question.id,
-                        animal_id=animal.id,
-                        valeur=float(donnees[i][j])
-                    )
-                    db.add(nouvelle_donnee)
-
-        db.commit()
+        service = build('drive', 'v3', credentials=credentials)
+        return service
     except Exception as e:
-        db.rollback()
-        raise e
-    finally:
-        db.close()
+        raise HTTPException(status_code=500, detail=f"Erreur Google Drive: {str(e)}")
 
-def initialiser_base_depuis_csv():
-    """Fonction pour initialiser la DB depuis un CSV (à exécuter une seule fois)"""
-    import csv
-    db = SessionLocal()
+def find_file_id(service, filename):
+    """Trouve l'ID du fichier sur Google Drive"""
     try:
-        # Vérifier si la DB est déjà initialisée
-        if db.query(Animal).count() > 0:
-            print("Base de données déjà initialisée")
-            return
+        results = service.files().list(
+            q=f"name='{filename}' and trashed=false",
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
 
-        NOM_CSV = "akinator_animaux.csv"
-        with open(NOM_CSV, 'r', encoding='utf-8') as fichier:
-            reader = csv.reader(fichier)
-
-            # Lire les animaux
-            animaux_noms = next(reader)[1:]
-            animaux_db = []
-            for nom in animaux_noms:
-                animal = Animal(nom=nom, compteur_apparitions=0)
-                db.add(animal)
-                animaux_db.append(animal)
-
-            db.flush()  # Pour obtenir les IDs
-
-            # Lire les compteurs
-            compteurs = [int(val) for val in next(reader)[1:]]
-            for idx, animal in enumerate(animaux_db):
-                animal.compteur_apparitions = compteurs[idx]
-
-            # Lire les questions et données
-            for ligne in reader:
-                question_texte = ligne[0]
-                valeurs = [float(val) for val in ligne[1:]]
-
-                question = Question(texte=question_texte)
-                db.add(question)
-                db.flush()  # Pour obtenir l'ID
-
-                for idx, valeur in enumerate(valeurs):
-                    donnee = Donnee(
-                        question_id=question.id,
-                        animal_id=animaux_db[idx].id,
-                        valeur=valeur
-                    )
-                    db.add(donnee)
-
-            db.commit()
-            print(f"Base de données initialisée avec {len(animaux_db)} animaux")
-    except FileNotFoundError:
-        print("Fichier CSV non trouvé - la base reste vide")
+        files = results.get('files', [])
+        if not files:
+            return None
+        return files[0]['id']
     except Exception as e:
-        db.rollback()
-        print(f"Erreur lors de l'initialisation : {e}")
-    finally:
-        db.close()
+        raise HTTPException(status_code=500, detail=f"Erreur recherche fichier: {str(e)}")
 
-# Fonctions de votre code (adaptées)
+def download_csv_from_drive():
+    """Télécharge le CSV depuis Google Drive"""
+    try:
+        service = get_drive_service()
+        file_id = find_file_id(service, GDRIVE_FILE_NAME)
+
+        if not file_id:
+            raise HTTPException(status_code=404, detail=f"Fichier '{GDRIVE_FILE_NAME}' non trouvé sur Google Drive")
+
+        request = service.files().get_media(fileId=file_id)
+        file_handle = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_handle, request)
+
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        file_handle.seek(0)
+        content = file_handle.read().decode('utf-8')
+        return content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur téléchargement: {str(e)}")
+
+def upload_csv_to_drive(content):
+    """Upload le CSV vers Google Drive"""
+    try:
+        service = get_drive_service()
+        file_id = find_file_id(service, GDRIVE_FILE_NAME)
+
+        file_metadata = {'name': GDRIVE_FILE_NAME}
+        media = MediaIoBaseUpload(
+            io.BytesIO(content.encode('utf-8')),
+            mimetype='text/csv',
+            resumable=True
+        )
+
+        if file_id:
+            # Mettre à jour le fichier existant
+            service.files().update(
+                fileId=file_id,
+                media_body=media
+            ).execute()
+        else:
+            # Créer un nouveau fichier
+            service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id'
+            ).execute()
+
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur upload: {str(e)}")
+
+def charger_donnees():
+    """Charge les données depuis Google Drive"""
+    try:
+        csv_content = download_csv_from_drive()
+
+        # Parser le CSV
+        reader = csv.reader(io.StringIO(csv_content))
+        animaux = next(reader)[1:]
+        compteur_apparitions = [int(val) for val in next(reader)[1:]]
+        questions = []
+        donnees = []
+
+        for ligne in reader:
+            questions.append(ligne[0])
+            donnees.append([float(val) for val in ligne[1:]])
+
+        donnees = np.asarray(donnees)
+        return animaux, compteur_apparitions, questions, donnees
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur chargement données: {str(e)}")
+
+def sauvegarde_csv(animaux, compteur_apparitions, questions, donnees):
+    """Sauvegarde le CSV sur Google Drive"""
+    try:
+        # Créer le contenu CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        writer.writerow(["Question"] + animaux)
+        writer.writerow(["Compteur d'apparitions"] + compteur_apparitions)
+
+        for i in range(len(questions)):
+            writer.writerow([questions[i]] + [f"{valeur:.3f}" for valeur in donnees[i]])
+
+        csv_content = output.getvalue()
+
+        # Upload vers Google Drive
+        upload_csv_to_drive(csv_content)
+    except Exception as e:
+        print(f"Erreur sauvegarde: {str(e)}")
+        # On ne lève pas d'exception pour ne pas bloquer le jeu
+
+# Fonctions de calcul (identiques à votre code)
 def donner_proba_animaux_sachant_r(r, donnees, proba_animaux):
     numerateurs = (1 - abs(r - donnees)) * proba_animaux
     denominateur = np.sum(numerateurs, axis=1)
@@ -652,15 +625,11 @@ def start_session():
     """Démarre une nouvelle session Akinator"""
     session_id = str(uuid.uuid4())
 
-    # Charger les données depuis PostgreSQL
-    animaux, compteur_apparitions, questions, donnees, animaux_db, questions_db = charger_donnees_db()
+    # Charger les données depuis Google Drive
+    animaux, compteur_apparitions, questions, donnees = charger_donnees()
 
     # Initialiser les probabilités
     apparitions_totales = sum(compteur_apparitions)
-    if apparitions_totales == 0:
-        apparitions_totales = len(animaux)
-        compteur_apparitions = [1] * len(animaux)
-
     proba_animaux = np.asarray([val / apparitions_totales for val in compteur_apparitions])
 
     # Créer la session
@@ -672,9 +641,7 @@ def start_session():
         "proba_animaux": proba_animaux,
         "reponses_donnees": {},
         "questions_pas_encore_posees": np.ones(len(questions), dtype=bool),
-        "compteur_question": 0,
-        "animaux_db": animaux_db,
-        "questions_db": questions_db
+        "compteur_question": 0
     }
 
     # Choisir la première question
@@ -774,11 +741,11 @@ def confirm_guess(request: ConfirmRequest):
             session["reponses_donnees"]
         )
 
-        # Sauvegarder dans PostgreSQL
-        sauvegarder_donnees_db(
-            session["animaux_db"],
-            session["questions_db"],
+        # Sauvegarder sur Google Drive
+        sauvegarde_csv(
+            session["animaux"],
             session["compteur_apparitions"],
+            session["questions"],
             session["donnees"]
         )
 
@@ -814,20 +781,6 @@ def confirm_guess(request: ConfirmRequest):
             question_number=session["compteur_question"]
         )
 
-@app.get("/init-db")
-def init_database():
-    """Route pour initialiser la base de données depuis le CSV"""
-    try:
-        initialiser_base_depuis_csv()
-        return {"message": "Base de données initialisée avec succès"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 if __name__ == "__main__":
     import uvicorn
-    # Initialiser la DB au démarrage si elle est vide
-    try:
-        initialiser_base_depuis_csv()
-    except:
-        pass
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
