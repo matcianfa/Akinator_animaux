@@ -18,21 +18,28 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Constantes
-REPONSES_POSSIBLES = ["Oui", "Plutôt oui", "Je ne sais pas", "Plutôt non", "Non"]
+REPONSES_POSSIBLES = ["Oui", "Plutôt oui", "Je ne sais pas (ou entre oui et non)", "Plutôt non", "Non"]
 VALEURS_REPONSES = [1, 0.75, 0.5, 0.25, 0]
-SEUIL = 0.3
+SEUIL = 0.7 # Seuil à partir duquel on estime que la réponse est bonne.
 
 # Configuration Google Drive
 SCOPES = ['https://www.googleapis.com/auth/drive']
-# Le nom du fichier CSV sur Google Drive
 GDRIVE_FILE_NAME = "akinator_animaux.csv"
+GDRIVE_SUGGESTIONS_FILE = "contenu_a_ajouter.csv"
 
 # Stockage des sessions en mémoire
 sessions: Dict[str, dict] = {}
 
 app = FastAPI(title="Akinator API")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+except:
+    pass  # Le dossier static n'existe peut-être pas
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,7 +54,10 @@ class SessionResponse(BaseModel):
     session_id: str
     question: str
     question_number: int
-    reponses_possibles: list
+    reponses_possibles: list = []
+
+    class Config:
+        arbitrary_types_allowed = True
 
 class AnswerRequest(BaseModel):
     session_id: str
@@ -64,11 +74,15 @@ class ConfirmRequest(BaseModel):
     session_id: str
     correct: bool
 
+class SuggestionRequest(BaseModel):
+    session_id: str
+    animal: str
+    question: str
+
 # Fonctions Google Drive
 def get_drive_service():
     """Initialise le service Google Drive"""
     try:
-        # Récupérer les credentials depuis la variable d'environnement
         creds_json = os.getenv('GOOGLE_CREDENTIALS')
         if not creds_json:
             raise ValueError("GOOGLE_CREDENTIALS non définie")
@@ -122,13 +136,13 @@ def download_csv_from_drive():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur téléchargement: {str(e)}")
 
-def upload_csv_to_drive(content):
+def upload_csv_to_drive(content, filename=GDRIVE_FILE_NAME):
     """Upload le CSV vers Google Drive"""
     try:
         service = get_drive_service()
-        file_id = find_file_id(service, GDRIVE_FILE_NAME)
+        file_id = find_file_id(service, filename)
 
-        file_metadata = {'name': GDRIVE_FILE_NAME}
+        file_metadata = {'name': filename}
         media = MediaIoBaseUpload(
             io.BytesIO(content.encode('utf-8')),
             mimetype='text/csv',
@@ -136,13 +150,11 @@ def upload_csv_to_drive(content):
         )
 
         if file_id:
-            # Mettre à jour le fichier existant
             service.files().update(
                 fileId=file_id,
                 media_body=media
             ).execute()
         else:
-            # Créer un nouveau fichier
             service.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -158,7 +170,6 @@ def charger_donnees():
     try:
         csv_content = download_csv_from_drive()
 
-        # Parser le CSV
         reader = csv.reader(io.StringIO(csv_content))
         animaux = next(reader)[1:]
         compteur_apparitions = [int(val) for val in next(reader)[1:]]
@@ -177,7 +188,6 @@ def charger_donnees():
 def sauvegarde_csv(animaux, compteur_apparitions, questions, donnees):
     """Sauvegarde le CSV sur Google Drive"""
     try:
-        # Créer le contenu CSV
         output = io.StringIO()
         writer = csv.writer(output)
 
@@ -188,16 +198,63 @@ def sauvegarde_csv(animaux, compteur_apparitions, questions, donnees):
             writer.writerow([questions[i]] + [f"{valeur:.3f}" for valeur in donnees[i]])
 
         csv_content = output.getvalue()
-
-        # Upload vers Google Drive
-        upload_csv_to_drive(csv_content)
+        upload_csv_to_drive(csv_content, GDRIVE_FILE_NAME)
     except Exception as e:
         print(f"Erreur sauvegarde: {str(e)}")
-        # On ne lève pas d'exception pour ne pas bloquer le jeu
 
-# Fonctions de calcul (identiques à votre code)
+def sauvegarder_suggestion(animal, question, reponses_donnees, questions):
+    """Sauvegarde une suggestion d'animal dans contenu_a_ajouter.csv"""
+    try:
+        service = get_drive_service()
+        file_id = find_file_id(service, GDRIVE_SUGGESTIONS_FILE)
+
+        # Lire toutes les lignes existantes
+        lignes_existantes = []
+        if file_id:
+            try:
+                request = service.files().get_media(fileId=file_id)
+                file_handle = io.BytesIO()
+                downloader = MediaIoBaseDownload(file_handle, request)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                file_handle.seek(0)
+                existing_content = file_handle.read().decode('utf-8')
+
+                # Parser le CSV existant
+                reader = csv.reader(io.StringIO(existing_content))
+                lignes_existantes = list(reader)
+
+            except Exception as e:
+                pass
+
+        # Créer le nouveau contenu
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Si pas de contenu existant, créer l'en-tête
+        if not lignes_existantes:
+            writer.writerow(["Animal", "Question proposée"])
+        else:
+            # Écrire toutes les lignes existantes
+            for idx, ligne in enumerate(lignes_existantes):
+                writer.writerow(ligne)
+
+        # Ajouter la nouvelle suggestion
+        writer.writerow([animal, question])
+
+        # Récupérer le contenu final
+        csv_content = output.getvalue()
+
+        # Upload
+        upload_csv_to_drive(csv_content, GDRIVE_SUGGESTIONS_FILE)
+        return True
+    except Exception as e:
+        return False
+
+# Fonctions de calcul
 def donner_proba_animaux_sachant_r(r, donnees, proba_animaux):
-    numerateurs = np.maximum(1 - abs(r - donnees), 0.05) * proba_animaux # On met un plancher pour éviter 0 qui absorbe trop et ne permet plus de récupérer un animal
+    numerateurs = np.maximum(1 - abs(r - donnees), 0.05) * proba_animaux
     denominateur = np.sum(numerateurs, axis=1)
     denominateur[denominateur == 0] = 1
     return np.divide(numerateurs, denominateur.reshape(-1, 1)), denominateur
@@ -220,7 +277,7 @@ def choix_meilleure_question(donnees, proba_animaux, questions_pas_encore_posees
 
 def recherche_bonne_reponse(proba_animaux, animaux):
     i_premier, i_second, *_ = np.argsort(proba_animaux)[::-1]
-    if proba_animaux[i_premier] > proba_animaux[i_second] + SEUIL:
+    if proba_animaux[i_premier] > SEUIL:
         return i_premier, proba_animaux[i_premier]
     else:
         return None, None
@@ -430,15 +487,20 @@ def get_interface():
                 display: block;
             }
 
-            .logo {
-                width: 200px;
-                margin-bottom: 20px;
+            input[type="text"] {
+                width: 100%;
+                padding: 15px;
+                margin-bottom: 15px;
+                border-radius: 10px;
+                border: none;
+                font-size: 1.1em;
+                color: #333;
             }
         </style>
     </head>
     <body>
         <div class="container">
-            <img src="/static/image_akinator.png" alt="Akinator" class="logo">
+            <h1>🔮 Akinator</h1>
             <p class="subtitle">Pense à un animal, je vais le deviner !</p>
 
             <div class="welcome-screen" id="welcomeScreen">
@@ -472,6 +534,15 @@ def get_interface():
             <div class="success-message" id="successMessage">
                 🎉 Super ! J'ai trouvé ! Merci d'avoir joué !
             </div>
+
+            <div class="guess-container" id="suggestionContainer" style="background: linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%);">
+                <div class="guess-title">Je ne trouve pas... Aide-moi ! 😅</div>
+                <p style="margin-bottom: 20px; font-size: 1.1em;">À quel animal pensais-tu ?</p>
+                <input type="text" id="animalInput" placeholder="Ex: Dauphin">
+                <p style="margin-bottom: 10px; font-size: 1.1em;">Propose une question pour distinguer cet animal :</p>
+                <input type="text" id="questionInput" placeholder="Ex: Vit-il dans l'eau ?">
+                <button class="btn-confirm" onclick="submitSuggestion()">📝 Envoyer ma suggestion</button>
+            </div>
         </div>
 
         <script>
@@ -487,9 +558,18 @@ def get_interface():
                     });
                     const data = await response.json();
 
+                    console.log('Données reçues:', data); // Pour debug
+
+                    if (!data.reponses_possibles) {
+                        console.error('reponses_possibles est manquant!');
+                        alert('Erreur: données incomplètes du serveur');
+                        return;
+                    }
+
                     sessionId = data.session_id;
                     displayQuestion(data.question, data.question_number, data.reponses_possibles);
                 } catch (error) {
+                    console.error('Erreur complète:', error);
                     alert('Erreur lors du démarrage du jeu : ' + error);
                 }
             }
@@ -571,7 +651,9 @@ def get_interface():
 
                     hideLoading();
 
-                    if (data.message) {
+                    if (data.need_suggestion) {
+                        showSuggestion();
+                    } else if (data.message && !data.is_final) {
                         showSuccess();
                         setTimeout(() => {
                             location.reload();
@@ -581,6 +663,43 @@ def get_interface():
                     } else {
                         displayQuestion(data.question, data.question_number, ['Oui', 'Plutôt oui', 'Je ne sais pas', 'Plutôt non', 'Non']);
                     }
+                } catch (error) {
+                    alert('Erreur : ' + error);
+                }
+            }
+
+            async function submitSuggestion() {
+                const animal = document.getElementById('animalInput').value.trim();
+                const question = document.getElementById('questionInput').value.trim();
+
+                if (!animal || !question) {
+                    alert('Merci de remplir les deux champs !');
+                    return;
+                }
+
+                showLoading();
+                hideSuggestion();
+
+                try {
+                    const response = await fetch('/suggest', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            animal: animal,
+                            question: question
+                        })
+                    });
+                    const data = await response.json();
+
+                    hideLoading();
+                    document.getElementById('successMessage').textContent = data.message;
+                    showSuccess();
+                    setTimeout(() => {
+                        location.reload();
+                    }, 3000);
                 } catch (error) {
                     alert('Erreur : ' + error);
                 }
@@ -621,6 +740,14 @@ def get_interface():
             function showSuccess() {
                 document.getElementById('successMessage').classList.add('active');
             }
+
+            function showSuggestion() {
+                document.getElementById('suggestionContainer').classList.add('active');
+            }
+
+            function hideSuggestion() {
+                document.getElementById('suggestionContainer').classList.remove('active');
+            }
         </script>
     </body>
     </html>
@@ -632,14 +759,11 @@ def start_session():
     """Démarre une nouvelle session Akinator"""
     session_id = str(uuid.uuid4())
 
-    # Charger les données depuis Google Drive
     animaux, compteur_apparitions, questions, donnees = charger_donnees()
 
-    # Initialiser les probabilités
     apparitions_totales = sum(compteur_apparitions)
     proba_animaux = np.asarray([val / apparitions_totales for val in compteur_apparitions])
 
-    # Créer la session
     sessions[session_id] = {
         "animaux": animaux,
         "compteur_apparitions": compteur_apparitions,
@@ -648,10 +772,10 @@ def start_session():
         "proba_animaux": proba_animaux,
         "reponses_donnees": {},
         "questions_pas_encore_posees": np.ones(len(questions), dtype=bool),
-        "compteur_question": 0
+        "compteur_question": 0,
+        "echecs_consecutifs": 0
     }
 
-    # Choisir la première question
     i_question = choix_meilleure_question(donnees, proba_animaux, sessions[session_id]["questions_pas_encore_posees"])
 
     if i_question is None:
@@ -664,7 +788,7 @@ def start_session():
         session_id=session_id,
         question=questions[i_question],
         question_number=1,
-        reponses_possibles=REPONSES_POSSIBLES
+        reponses_possibles=list(REPONSES_POSSIBLES)
     )
 
 @app.post("/answer")
@@ -679,22 +803,18 @@ def answer_question(request: AnswerRequest):
     if not (0 <= request.reponse < len(VALEURS_REPONSES)):
         raise HTTPException(status_code=400, detail="Réponse invalide")
 
-    # Enregistrer la réponse
     session["reponses_donnees"][i_question] = request.reponse
     session["questions_pas_encore_posees"][i_question] = False
 
-    # Mettre à jour les probabilités
     session["proba_animaux"] = donner_proba_animaux_sachant_r(
         VALEURS_REPONSES[request.reponse],
         session["donnees"],
         session["proba_animaux"]
     )[0][i_question]
 
-    # On rajoute un peu de bruit pour ne pas faire totalement disparaitre les animaux de faible probabilité (au cas ou)
     session["proba_animaux"] += 1e-6
     session["proba_animaux"] /= np.sum(session["proba_animaux"])
 
-    # Vérifier si on a trouvé
     indice_meilleur_animal, proba = recherche_bonne_reponse(session["proba_animaux"], session["animaux"])
 
     if indice_meilleur_animal is not None:
@@ -705,7 +825,6 @@ def answer_question(request: AnswerRequest):
             is_final=True
         )
 
-    # Choisir la prochaine question
     i_question = choix_meilleure_question(
         session["donnees"],
         session["proba_animaux"],
@@ -752,7 +871,6 @@ def confirm_guess(request: ConfirmRequest):
             session["reponses_donnees"]
         )
 
-        # Sauvegarder sur Google Drive
         sauvegarde_csv(
             session["animaux"],
             session["compteur_apparitions"],
@@ -763,35 +881,68 @@ def confirm_guess(request: ConfirmRequest):
         del sessions[request.session_id]
         return {"message": "Parfait ! Merci d'avoir joué !"}
     else:
+        # COMPTEUR D'ÉCHECS - ICI !!!
+        session["echecs_consecutifs"] += 1
         session["proba_animaux"][session["animal_propose"]] = 0
         del session["animal_propose"]
 
-        # Continuer avec une nouvelle question
+        # VÉRIFICATION DES 3 ÉCHECS - ICI !!!
+        if session["echecs_consecutifs"] >= 3:
+            return {
+                "need_suggestion": True,
+                "message": "Je ne trouve pas... Peux-tu m'aider ?"
+            }
+
+
         i_question = choix_meilleure_question(
-            session["donnees"],
-            session["proba_animaux"],
-            session["questions_pas_encore_posees"]
+        session["donnees"],
+        session["proba_animaux"],
+        session["questions_pas_encore_posees"]
         )
 
-        if i_question is None:
-            i_max = np.argmax(session["proba_animaux"])
-            return GuessResponse(
-                animal=session["animaux"][i_max],
-                probabilite=float(session["proba_animaux"][i_max]),
-                is_final=True
-            )
-
-        session["question_courante"] = i_question
-        session["compteur_question"] += 1
-
+    if i_question is None:
+        i_max = np.argmax(session["proba_animaux"])
+        session["animal_propose"] = i_max
         return GuessResponse(
-            animal="",
-            probabilite=0.0,
-            is_final=False,
-            question=session["questions"][i_question],
-            question_number=session["compteur_question"]
+            animal=session["animaux"][i_max],
+            probabilite=float(session["proba_animaux"][i_max]),
+            is_final=True
         )
+
+    session["question_courante"] = i_question
+    session["compteur_question"] += 1
+
+    return GuessResponse(
+        animal="",
+        probabilite=0.0,
+        is_final=False,
+        question=session["questions"][i_question],
+        question_number=session["compteur_question"]
+    )
+
+@app.post("/suggest")
+def submit_suggestion(request: SuggestionRequest):
+    """SAUVEGARDE LA SUGGESTION - ICI !!!"""
+    if request.session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    session = sessions[request.session_id]
+
+    # APPEL À LA FONCTION DE SAUVEGARDE - ICI !!!
+    success = sauvegarder_suggestion(
+        request.animal,
+        request.question,
+        session["reponses_donnees"],
+        session["questions"]
+    )
+
+    del sessions[request.session_id]
+
+    if success:
+        return {"message": f"Merci ! J'ai appris que '{request.animal}' existe. Ta suggestion a été enregistrée !"}
+    else:
+        return {"message": "Merci pour ta suggestion !"}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    # Pour lancer : python "D:\Documents\A_conserver\Cours\Programmation\Labo IA\Akinator\akinator pour render\main.py"
