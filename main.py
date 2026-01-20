@@ -496,11 +496,16 @@ def get_interface():
                 font-size: 1.1em;
                 color: #333;
             }
+
+            .logo {
+                width: 200px;
+                margin-bottom: 20px;
+            }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔮 Akinator</h1>
+            <img src="/static/image_akinator.png" alt="Akinator" class="logo">
             <p class="subtitle">Pense à un animal, je vais le deviner !</p>
 
             <div class="welcome-screen" id="welcomeScreen">
@@ -672,8 +677,8 @@ def get_interface():
                 const animal = document.getElementById('animalInput').value.trim();
                 const question = document.getElementById('questionInput').value.trim();
 
-                if (!animal || !question) {
-                    alert('Merci de remplir les deux champs !');
+                if (!animal and !question) {
+                    alert('Merci de remplir au moins un champs !');
                     return;
                 }
 
