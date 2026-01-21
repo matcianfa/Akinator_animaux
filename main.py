@@ -677,7 +677,7 @@ def get_interface():
                 const animal = document.getElementById('animalInput').value.trim();
                 const question = document.getElementById('questionInput').value.trim();
 
-                if (!animal and !question) {
+                if (!animal && !question) {
                     alert('Merci de remplir au moins un champs !');
                     return;
                 }
