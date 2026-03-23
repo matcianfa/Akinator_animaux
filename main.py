@@ -886,6 +886,7 @@ const EMOJI_MAP = {
   'hibou':['🦉'], 'flamant':['🦩'], 'perroquet':['🦜'],
   'poule':['🐔','poulet'], 'canard':['🦆'], 'cygne':['🦢'],
   'autruche':['🦤'], 'paon':['🦚'], 'pigeon':['🕊️','colombe'], 'papillon':['🦋'],
+  'oie':['🦆'], 'koala':['🐨'], 'lézard':['🦎','lezard'],
   'abeille':['🐝'], 'coccinelle':['🐞'], 'araignée':['🕷'],
   'scorpion':['🦂'], 'escargot':['🐌'], 'poisson':['🐟'],
   'cheval marin':['🦑'], 'calamar':['🦑'],
