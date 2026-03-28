@@ -35,6 +35,57 @@ GDRIVE_SUGGESTIONS_FILE = "contenu_a_ajouter.csv"
 # Stockage des sessions en mémoire
 sessions: Dict[str, dict] = {}
 
+# ── Stockage des sessions version classique ───────────────────────────────────
+from itertools import combinations
+import random as _random
+
+CSV_CLASSIQUE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qui_est_ce_classique.csv")
+sessions_classique: Dict[str, dict] = {}
+
+def charger_donnees_classique():
+    if not os.path.exists(CSV_CLASSIQUE_PATH):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Fichier '{CSV_CLASSIQUE_PATH}' introuvable. Placez-le dans le même répertoire que main.py."
+        )
+    with open(CSV_CLASSIQUE_PATH, newline='', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        personnages = header[1:]
+        attributs, donnees = [], []
+        for row in reader:
+            if not row or not row[0].strip():
+                continue
+            attributs.append(row[0])
+            donnees.append([int(v) for v in row[1:]])
+    return personnages, attributs, donnees
+
+def meilleure_combinaison_classique(donnees, remaining, attrs_disponibles, max_size=3):
+    n = len(remaining)
+    if n == 0:
+        return []
+    best_combo, best_score = None, float('inf')
+    attrs_list = list(attrs_disponibles)
+    effective_max = min(max_size, len(attrs_list))
+    if n <= 4:
+        effective_max = min(2, effective_max)
+    for size in range(1, effective_max + 1):
+        for combo in combinations(attrs_list, size):
+            count_yes = sum(1 for c in remaining if any(donnees[a][c] == 1 for a in combo))
+            score = abs(count_yes - n / 2)
+            if score < best_score:
+                best_score = score
+                best_combo = list(combo)
+            if best_score == 0:
+                break
+        if best_score == 0:
+            break
+    return best_combo if best_combo is not None else [attrs_list[0]]
+
+def formater_question_classique(attributs, attr_indices):
+    textes = [attributs[a] for a in attr_indices]
+    return "Le personnage " + " ou ".join(textes) + " ?"
+
 # ── Application ──────────────────────────────────────────────────────────────
 app = FastAPI(title="Qui est-ce API")
 
@@ -610,12 +661,173 @@ def get_interface():
     background: white; color: #333; margin-bottom:14px;
   }
   .admin-input:focus { outline:none; border-color: var(--primary); }
+
+  /* ═══════════════════════════════════════
+     BOUTON VERSION CLASSIQUE
+  ═══════════════════════════════════════ */
+  #btnClassique {
+    position: fixed; top: 54px; left: 14px; z-index: 300;
+    background: #fff; color: #43b89c;
+    border: 2px solid #43b89c; border-radius: 10px;
+    padding: 8px 14px; font-size: .85em; font-weight: 700;
+    cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.12);
+    transition: all .2s;
+  }
+  #btnClassique:hover { background: #43b89c; color: white; }
+  #btnClassique.active-mode { background: #43b89c; color: white; }
+
+  /* ═══════════════════════════════════════
+     VERSION CLASSIQUE — STYLES
+  ═══════════════════════════════════════ */
+
+  /* Grille des personnages (sélection + jeu) */
+  .cl-perso-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 8px;
+    margin: 14px 0;
+  }
+  .cl-perso-card {
+    background: var(--bg);
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 10px 6px;
+    text-align: center;
+    cursor: pointer;
+    font-size: .85em;
+    font-weight: 600;
+    color: #444;
+    transition: all .2s;
+    position: relative;
+    user-select: none;
+  }
+  .cl-perso-card:hover { border-color: var(--green); background: #e0f5f0; }
+  .cl-perso-card.selected { border-color: var(--green); background: #c8ede7; color: #2a7a68; font-weight: 800; }
+  .cl-perso-card.eliminated {
+    opacity: .25;
+    filter: grayscale(1);
+    pointer-events: none;
+  }
+  .cl-perso-card.manually-eliminated {
+    opacity: .18;
+    filter: grayscale(1) blur(1px);
+    pointer-events: auto;   /* peut être rétabli */
+  }
+  .cl-perso-icon { font-size: 1.6em; display: block; margin-bottom: 3px; }
+  .cl-perso-card .cl-x-badge {
+    position: absolute; top: 2px; right: 4px;
+    font-size: .75em; color: #e74c3c; font-weight: 900;
+  }
+
+  /* Attributs avec cases à cocher */
+  .cl-attr-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 340px;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-bottom: 12px;
+  }
+  .cl-attr-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--bg);
+    cursor: pointer;
+    transition: background .15s;
+    font-size: .92em;
+  }
+  .cl-attr-item:hover { background: #e0d9f7; }
+  .cl-attr-item.checked { background: #dde0ff; font-weight: 600; color: var(--secondary); }
+  .cl-attr-item input[type=checkbox] {
+    width: 17px; height: 17px; cursor: pointer; accent-color: var(--secondary);
+    flex-shrink: 0;
+  }
+
+  /* Prévisualisation de la question */
+  .cl-question-preview {
+    background: linear-gradient(135deg, #e8ecff, #f0e8ff);
+    border: 2px solid var(--primary);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin: 12px 0;
+    font-size: 1em;
+    font-weight: 600;
+    color: var(--secondary);
+    min-height: 50px;
+    transition: all .2s;
+  }
+
+  /* Réponse Oui/Non d'Akinator (version classique) */
+  .cl-answer-bubble-oui {
+    background: linear-gradient(135deg, #43b89c22, #2ecc7122);
+    border: 2px solid var(--green);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 14px 0;
+    font-size: 1.2em;
+    color: #27ae60;
+    font-weight: 800;
+    text-align: center;
+  }
+  .cl-answer-bubble-non {
+    background: linear-gradient(135deg, #f5576c22, #f09afb22);
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 14px 0;
+    font-size: 1.2em;
+    color: var(--accent);
+    font-weight: 800;
+    text-align: center;
+  }
+
+  /* Panneau "plateau" du joueur (mini grille) */
+  .cl-board-panel {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 18px rgba(102,126,234,.1);
+    padding: 14px;
+  }
+  .cl-board-panel h3 { font-size: .95em; margin-bottom: 8px; }
+  .cl-board-hint {
+    font-size: .75em;
+    color: #aaa;
+    margin-bottom: 8px;
+    font-style: italic;
+  }
+
+  /* Bouton Oui / Non classique */
+  .btn-oui { background: linear-gradient(135deg, #43b89c, #2ecc71); }
+  .btn-oui:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(67,184,156,.4); }
+  .btn-non { background: linear-gradient(135deg, #f093fb, var(--accent)); }
+  .btn-non:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(245,87,108,.4); }
+
+  /* Compteur de candidats restants */
+  .cl-remaining-badge {
+    display: inline-block;
+    background: var(--secondary);
+    color: white;
+    border-radius: 20px;
+    padding: 3px 12px;
+    font-size: .8em;
+    font-weight: 700;
+    margin-left: 8px;
+  }
+
+  /* Modal proposition classique */
+  #clModalProposition .modal-box { max-width: 620px; }
 </style>
 </head>
 <body>
 
 <!-- ── Bouton Technique ── -->
 <button id="btnAdmin" onclick="toggleAdmin()">⚙️ Technique</button>
+<!-- ── Bouton Version Classique ── -->
+<button id="btnClassique" onclick="switchMode()">🧩 Version Classique</button>
 
 <!-- ══════════════════════════════════════
      PANNEAU TECHNIQUE (ADMIN)
@@ -702,6 +914,11 @@ def get_interface():
     </div>
   </div>
 </div>
+
+<!-- ══════════════════════════════════════
+     CONTENEUR MODE ANIMAUX
+══════════════════════════════════════════ -->
+<div id="animauxMode">
 
 <!-- ══════════════════════════════════════
      ÉCRAN 1 : SÉLECTION DE L'ANIMAL
@@ -850,10 +1067,179 @@ def get_interface():
   </div>
 </div>
 
-<!-- Spinner ────────────────────────────── -->
+<!-- ── Spinner ────────────────────────────── -->
 <div class="loading-overlay" id="loadingOverlay">
   <div class="spinner"></div>
   <p style="color:var(--primary);font-weight:600">Chargement…</p>
+</div>
+
+</div><!-- /animauxMode -->
+
+
+<!-- ══════════════════════════════════════
+     CONTENEUR MODE CLASSIQUE
+══════════════════════════════════════════ -->
+<div id="classiqueMode" style="display:none">
+<style>
+  #classiqueMode { --bg: #f0fff8; --primary: #2a9d6e; --secondary: #1e7a55; }
+  #classiqueMode .card { box-shadow: 0 6px 28px rgba(42,157,110,.13); }
+  #classiqueMode .action-panel { box-shadow: 0 4px 18px rgba(42,157,110,.1); }
+  #classiqueMode select:focus { border-color: #2a9d6e; }
+  #classiqueMode h2, #classiqueMode h3 { color: #1e7a55; }
+</style>
+
+<!-- ══════════════════════════════════════
+     CL-ÉCRAN 1 : SÉLECTION DU PERSONNAGE
+══════════════════════════════════════════ -->
+<div id="clSelectionScreen" class="screen active" style="max-width:600px;margin:0 auto;">
+  <div class="card" style="text-align:center;">
+    <h1>🧩 Qui est-ce ? <span style="font-size:.6em;color:var(--green)">— Version Classique</span></h1>
+    <p class="subtitle">
+      Choisissez secrètement un personnage sur votre plateau physique.<br>
+      Akinator va essayer de le deviner, et vous devrez deviner le sien !
+    </p>
+    <div style="background:var(--bg);border-radius:14px;padding:24px 32px;margin:24px 0;display:inline-block;">
+      <p style="font-size:1.15em;font-weight:600;color:var(--secondary);margin-bottom:6px;">
+        🎭 Avez-vous choisi votre personnage ?
+      </p>
+      <p style="color:#888;font-size:.9em;">Ne le révélez pas — gardez-le secret !</p>
+    </div>
+    <br>
+    <button class="btn-success" onclick="clLancerJeu()"
+            style="font-size:1.1em;padding:16px 40px;">
+      ✅ Oui, j'ai choisi ! Commencer
+    </button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     CL-ÉCRAN 2 : JEU CLASSIQUE
+══════════════════════════════════════════ -->
+<div id="clGameScreen" class="screen" style="max-width:700px;margin:0 auto;">
+  <div id="clTurnBanner" class="turn-banner turn-joueur">🙋 C'est votre tour !</div>
+  <div class="action-panel">
+
+      <!-- Tour du joueur ───────────────── -->
+      <div id="clZoneJoueur">
+        <!-- Compteur de personnages restants -->
+        <div id="clRemainingBanner" style="background:linear-gradient(135deg,#e0fff4,#c8f5e4);
+             border:2px solid #43b89c;border-radius:10px;padding:10px 16px;margin-bottom:14px;
+             font-size:.95em;font-weight:600;color:#1e7a55;text-align:center;">
+          🎭 Akinator a encore le choix entre <span id="clRemainingCount" style="font-size:1.2em">—</span> personnages
+        </div>
+        <h3>Posez une question à Akinator :</h3>
+        <p style="color:#888;font-size:.85em;margin-bottom:10px">
+          Cochez un ou plusieurs attributs — Akinator répond Oui si son personnage en possède <strong>au moins un</strong>.
+        </p>
+        <div id="clAttrList" class="cl-attr-list"></div>
+
+        <!-- Prévisualisation -->
+        <div class="cl-question-preview" id="clQuestionPreview">
+          ← Cochez des attributs pour former votre question
+        </div>
+
+        <div class="row">
+          <button class="btn-primary" id="clBtnPoser" onclick="clPoserQuestion()" disabled>
+            ❓ Poser la question
+          </button>
+        </div>
+      </div>
+
+      <!-- Réponse d'Akinator ──────────── -->
+      <div id="clZoneReponse" style="display:none">
+        <h3>Akinator répond :</h3>
+        <div id="clBulleReponse"></div>
+        <p id="clQuestionPoseeTexte" style="color:#888;font-size:.88em;margin-bottom:14px;font-style:italic;"></p>
+        <p id="clEliminationInfo" style="color:#43b89c;font-size:.88em;margin-bottom:14px;font-weight:600;"></p>
+        <div class="row">
+          <button class="btn-primary" onclick="clTourAkinator()">➡️ Au tour d'Akinator</button>
+          <button class="btn-danger" onclick="clOuvrirModalProposition()">🏆 Proposer un personnage</button>
+        </div>
+      </div>
+
+      <!-- Tour d'Akinator : question ───── -->
+      <div id="clZoneAkinatorQuestion" style="display:none">
+        <h3>Akinator vous pose une question :</h3>
+        <p id="clAkinatorQuestionTexte"
+           style="font-size:1.1em;font-weight:600;color:#333;margin:14px 0;padding:14px;
+                  background:var(--bg);border-radius:10px;"></p>
+        <p style="color:#888;font-size:.88em;margin-bottom:10px">
+          Répondez <strong>Oui</strong> si votre personnage possède au moins un des attributs cités.
+        </p>
+        <div class="row" style="justify-content:center;gap:16px;">
+          <button class="btn-oui" onclick="clRepondreAkinator(1)" style="min-width:130px;">
+            ✅ Oui
+          </button>
+          <button class="btn-non" onclick="clRepondreAkinator(0)" style="min-width:130px;">
+            ❌ Non
+          </button>
+        </div>
+      </div>
+
+      <!-- Tour d'Akinator : proposition ── -->
+      <div id="clZoneAkinatorProposition" style="display:none">
+        <div class="proposal-box">
+          <div style="font-size:1em">🤔 Akinator pense que votre personnage est…</div>
+          <div class="proposal-animal" id="clAkinatorProposalPerso"></div>
+        </div>
+        <p style="color:#666;font-size:.95em;margin-bottom:14px;text-align:center">
+          Est-ce bien votre personnage ?
+        </p>
+        <div class="row" style="justify-content:center">
+          <button class="btn-success" onclick="clConfirmerPropositionAkinator(true)">
+            ✅ Oui, c'est lui !
+          </button>
+          <button class="btn-danger" onclick="clConfirmerPropositionAkinator(false)">
+            ❌ Non, ce n'est pas lui
+          </button>
+        </div>
+      </div>
+
+    </div><!-- /action-panel -->
+</div><!-- /clGameScreen -->
+
+<!-- ══════════════════════════════════════
+     CL-ÉCRAN 3 : FIN DE PARTIE
+══════════════════════════════════════════ -->
+<div id="clEndScreen" class="screen">
+  <div class="card end-box">
+    <div class="end-title" id="clEndTitle"></div>
+    <div id="clEndMessage" style="color:#666;margin-bottom:20px;font-size:1.05em;"></div>
+    <div class="reveal-row">
+      <div class="reveal-card">
+        <div class="label">Personnage d'Akinator</div>
+        <div class="big-emoji" id="clEmojiAkinator">🤖</div>
+        <div class="name" id="clNomAkinator"></div>
+      </div>
+    </div>
+    <div class="row" style="justify-content:center;gap:12px;">
+      <button class="btn-success" onclick="clRejouer()">🔄 Rejouer (Classique)</button>
+      <button class="btn-outline" onclick="switchMode()">🐾 Retour version Animaux</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- /classiqueMode -->
+
+<!-- Spinner ────────────────────────────── -->
+<div class="loading-overlay" id="clLoadingOverlay">
+  <div class="spinner" style="border-top-color:#43b89c"></div>
+  <p style="color:#1e7a55;font-weight:600">Chargement…</p>
+</div>
+
+<!-- Modal proposition classique ── -->
+<div class="modal-overlay" id="clModalProposition">
+  <div class="modal-box" style="max-width:560px;">
+    <h3 style="color:#1e7a55;">🏆 Quel est le personnage d'Akinator ?</h3>
+    <p style="color:#888;font-size:.88em;margin-bottom:12px;">Cliquez sur un prénom pour le sélectionner.</p>
+    <div id="clModalNomGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;margin-bottom:16px;max-height:340px;overflow-y:auto;"></div>
+    <div class="modal-actions">
+      <button class="btn-outline" onclick="clFermerModalProposition()" style="color:#1e7a55;border-color:#1e7a55;">Annuler</button>
+      <button class="btn-success" id="clBtnConfirmerProp" onclick="clConfirmerProposition()" disabled>
+        ✅ Confirmer
+      </button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -908,8 +1294,13 @@ function getEmoji(name) {
 // ══════════════════════════════════════════
 //  Utilitaires d'affichage
 // ══════════════════════════════════════════
+// Gère uniquement les écrans du mode animaux
+const ANIMAUX_SCREENS = ['selectionScreen','gameScreen','endScreen'];
 function showScreen(id) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  ANIMAUX_SCREENS.forEach(s => {
+    const el = document.getElementById(s);
+    if (el) el.classList.remove('active');
+  });
   document.getElementById(id).classList.add('active');
 }
 function loading(on) {
@@ -1630,6 +2021,399 @@ async function sauvegarderNouvelleQuestion() {
 //  Initialisation
 // ══════════════════════════════════════════
 window.onload = chargerAnimaux;
+
+// ══════════════════════════════════════════════════════════════
+//  VERSION CLASSIQUE — état global & utilitaires
+// ══════════════════════════════════════════════════════════════
+var clCurrentMode = false;
+var clSessionId   = null;
+var clPersonnages = [];
+var clAttributs   = [];
+var clAttrsChecked = new Set();
+
+var CL_PERSO_ICONS = {
+  'alex':'🧑', 'alfred':'👴', 'anita':'👩', 'bernard':'🧔', 'claire':'👱‍♀️',
+  'david':'🧑‍🦰', 'eric':'🤓', 'florence':'👩‍🦱', 'franz':'🧓', 'georges':'👨‍🦲',
+  'herman':'😄', 'joe':'🎩', 'maria':'👩‍🦱', 'max':'🧐', 'olivia':'👩‍🦰',
+  'paul':'🤔', 'peter':'🙂', 'philippe':'🎩', 'richard':'🧔', 'robert':'👴',
+  'sam':'😎', 'suzanne':'👩', 'tom':'😶', 'victor':'🕵️',
+};
+function clGetIcon(name) {
+  return CL_PERSO_ICONS[name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')] || '🧑';
+}
+
+function clLoading(on) {
+  var el = document.getElementById('clLoadingOverlay');
+  if (el) el.classList.toggle('active', on);
+}
+function clShowZone() {
+  var ids = Array.from(arguments);
+  ['clZoneJoueur','clZoneReponse','clZoneAkinatorQuestion','clZoneAkinatorProposition']
+    .forEach(function(z) {
+      var el = document.getElementById(z);
+      if (el) el.style.display = ids.indexOf(z) >= 0 ? 'block' : 'none';
+    });
+}
+function clSetBanner(text, type) {
+  var b = document.getElementById('clTurnBanner');
+  if (!b) return;
+  b.textContent = text;
+  b.className = 'turn-banner ' + (type === 'joueur' ? 'turn-joueur' : 'turn-akinator');
+}
+
+// Gère uniquement les écrans du mode classique
+var CL_SCREENS = ['clSelectionScreen','clGameScreen','clEndScreen'];
+function clShowScreen(id) {
+  CL_SCREENS.forEach(function(s) {
+    var el = document.getElementById(s);
+    if (el) el.classList.remove('active');
+  });
+  var target = document.getElementById(id);
+  if (target) target.classList.add('active');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Bascule de mode (Animaux ↔ Classique)
+// ══════════════════════════════════════════════════════════════
+function switchMode() {
+  clCurrentMode = !clCurrentMode;
+  var btnCl = document.getElementById('btnClassique');
+  if (clCurrentMode) {
+    document.getElementById('animauxMode').style.display   = 'none';
+    document.getElementById('classiqueMode').style.display = 'block';
+    clShowScreen('clSelectionScreen');
+    btnCl.textContent = '🐾 Version Animaux';
+    btnCl.classList.add('active-mode');
+    if (clPersonnages.length === 0) chargerPersonnagesClassique();
+  } else {
+    document.getElementById('animauxMode').style.display   = 'block';
+    document.getElementById('classiqueMode').style.display = 'none';
+    btnCl.textContent = '🧩 Version Classique';
+    btnCl.classList.remove('active-mode');
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  Chargement des attributs
+// ══════════════════════════════════════════════════════════════
+async function chargerPersonnagesClassique() {
+  clLoading(true);
+  try {
+    const r = await fetch('/classique/personnages');
+    if (!r.ok) throw new Error('Erreur serveur ' + r.status);
+    const data = await r.json();
+    clPersonnages = data.personnages;
+    clAttributs   = data.attributs;
+  } catch(e) {
+    alert('Erreur chargement : ' + e.message);
+  }
+  clLoading(false);
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  Démarrage de la partie
+// ══════════════════════════════════════════════════════════════
+async function clLancerJeu() {
+  clLoading(true);
+  try {
+    const r = await fetch('/classique/start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({personnage_joueur_index: 0})
+    });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    const data = await r.json();
+    clSessionId    = data.session_id;
+    clPersonnages  = data.personnages;
+    clAttributs    = data.attributs;
+    clAttrsChecked = new Set();
+
+    clBuildAttrList();
+    clBuildModalNomGrid();
+    clUpdateRemainingCount(data.personnages.length);
+    clShowScreen('clGameScreen');
+    clShowZone('clZoneJoueur');
+    clSetBanner('🙋 Votre tour — posez une question à Akinator !', 'joueur');
+  } catch(e) {
+    alert('Erreur démarrage : ' + e.message);
+  }
+  clLoading(false);
+}
+
+function clRejouer() {
+  clSessionId      = null;
+  clAttrsChecked   = new Set();
+  clPropositionIdx = null;
+  clShowScreen('clSelectionScreen');
+}
+
+function clUpdateRemainingCount(n) {
+  const el = document.getElementById('clRemainingCount');
+  if (el) el.textContent = n;
+}
+
+// Grille de prénoms pour la modal (sans emoji)
+var clPropositionIdx = null;
+function clBuildModalNomGrid() {
+  const grid = document.getElementById('clModalNomGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  clPersonnages.forEach((nom, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = nom;
+    btn.style.cssText = 'padding:8px 6px;border-radius:8px;border:2px solid #dde;background:#f8f8f8;' +
+      'font-size:.9em;font-weight:600;cursor:pointer;color:#333;transition:all .15s;';
+    btn.id = 'clPropBtn-' + i;
+    btn.onclick = () => clSelectionnerProposition(i);
+    grid.appendChild(btn);
+  });
+}
+
+function clOuvrirModalProposition() {
+  clPropositionIdx = null;
+  document.querySelectorAll('#clModalNomGrid button').forEach(b => {
+    b.style.background    = '#f8f8f8';
+    b.style.borderColor   = '#dde';
+    b.style.color         = '#333';
+  });
+  document.getElementById('clBtnConfirmerProp').disabled = true;
+  document.getElementById('clModalProposition').classList.add('active');
+}
+function clFermerModalProposition() {
+  document.getElementById('clModalProposition').classList.remove('active');
+}
+function clSelectionnerProposition(index) {
+  document.querySelectorAll('#clModalNomGrid button').forEach(b => {
+    b.style.background  = '#f8f8f8';
+    b.style.borderColor = '#dde';
+    b.style.color       = '#333';
+  });
+  const btn = document.getElementById('clPropBtn-' + index);
+  if (btn) {
+    btn.style.background  = '#d4f5e9';
+    btn.style.borderColor = '#43b89c';
+    btn.style.color       = '#1e7a55';
+  }
+  clPropositionIdx = index;
+  document.getElementById('clBtnConfirmerProp').disabled = false;
+}
+
+async function clConfirmerProposition() {
+  if (clPropositionIdx === null) return;
+  clFermerModalProposition();
+  clLoading(true);
+  try {
+    const r = await fetch('/classique/player_proposes', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: clSessionId, personnage_index: clPropositionIdx})
+    });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    const data = await r.json();
+    if (data.correct) {
+      clAfficherFin('🏆 Bravo ! Vous avez trouvé !',
+                    "Vous avez deviné le personnage d'Akinator !",
+                    data.personnage_akinator);
+    } else {
+      alert("❌ Ce n'est pas le bon personnage ! Continuez à poser des questions.");
+    }
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  }
+  clLoading(false);
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  Liste des attributs (re-cochables à chaque tour)
+// ══════════════════════════════════════════════════════════════
+function clBuildAttrList() {
+  const list = document.getElementById('clAttrList');
+  list.innerHTML = '';
+  clAttributs.forEach((attr, i) => {
+    const div = document.createElement('div');
+    div.className = 'cl-attr-item';
+    div.id = 'clAttr-' + i;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id   = 'clCb-' + i;
+    cb.onchange = () => clToggleAttr(i, cb.checked);
+    const lbl = document.createElement('label');
+    lbl.htmlFor     = 'clCb-' + i;
+    lbl.textContent = attr;
+    lbl.style.cursor = 'pointer';
+    lbl.style.flex   = '1';
+    div.appendChild(cb);
+    div.appendChild(lbl);
+    div.onclick = (e) => {
+      if (e.target !== cb && e.target !== lbl) { cb.checked = !cb.checked; clToggleAttr(i, cb.checked); }
+    };
+    list.appendChild(div);
+  });
+}
+
+function clResetCheckboxes() {
+  clAttrsChecked = new Set();
+  clAttributs.forEach((_, i) => {
+    const cb  = document.getElementById('clCb-' + i);
+    const div = document.getElementById('clAttr-' + i);
+    if (cb)  cb.checked = false;
+    if (div) div.classList.remove('checked');
+  });
+  document.getElementById('clBtnPoser').disabled = true;
+  clUpdateQuestionPreview();
+}
+
+function clToggleAttr(idx, checked) {
+  const div = document.getElementById('clAttr-' + idx);
+  if (checked) { clAttrsChecked.add(idx);    div.classList.add('checked');    }
+  else         { clAttrsChecked.delete(idx); div.classList.remove('checked'); }
+  clUpdateQuestionPreview();
+  document.getElementById('clBtnPoser').disabled = clAttrsChecked.size === 0;
+}
+
+function clUpdateQuestionPreview() {
+  const preview = document.getElementById('clQuestionPreview');
+  if (clAttrsChecked.size === 0) {
+    preview.textContent = '← Cochez des attributs pour former votre question';
+    preview.style.color = '#aaa';
+    return;
+  }
+  const textes = [...clAttrsChecked].map(i => clAttributs[i]);
+  preview.textContent = '❓ Le personnage ' + textes.join(' ou ') + ' ?';
+  preview.style.color = 'var(--secondary)';
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  Tour du joueur
+// ══════════════════════════════════════════════════════════════
+async function clPoserQuestion() {
+  if (clAttrsChecked.size === 0) { alert('Cochez au moins un attribut.'); return; }
+  clLoading(true);
+  try {
+    const r = await fetch('/classique/player_asks', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: clSessionId, attr_indices: [...clAttrsChecked]})
+    });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    const data = await r.json();
+
+    const bulle = document.getElementById('clBulleReponse');
+    if (data.reponse === 'Oui') {
+      bulle.className   = 'cl-answer-bubble-oui';
+      bulle.textContent = '✅ Oui !';
+    } else {
+      bulle.className   = 'cl-answer-bubble-non';
+      bulle.textContent = '❌ Non !';
+    }
+    document.getElementById('clQuestionPoseeTexte').textContent = '« ' + data.question_text + ' »';
+    document.getElementById('clEliminationInfo').textContent    = '';
+
+    clResetCheckboxes();
+    clShowZone('clZoneReponse');
+    clSetBanner('🤖 Akinator a répondu — à son tour !', 'akinator');
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  }
+  clLoading(false);
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  Tour d'Akinator
+// ══════════════════════════════════════════════════════════════
+async function clTourAkinator() {
+  clLoading(true);
+  try {
+    const r    = await fetch('/classique/akinator_turn/' + clSessionId);
+    if (!r.ok) throw new Error((await r.json()).detail);
+    const data = await r.json();
+
+    if (data.type === 'question') {
+      document.getElementById('clAkinatorQuestionTexte').textContent = data.question_text;
+      clShowZone('clZoneAkinatorQuestion');
+      clSetBanner('🤖 Akinator vous pose une question !', 'akinator');
+    } else {
+      document.getElementById('clAkinatorProposalPerso').textContent =
+        clGetIcon(data.personnage) + ' ' + data.personnage;
+      clShowZone('clZoneAkinatorProposition');
+      clSetBanner('🤔 Akinator fait une proposition !', 'akinator');
+    }
+  } catch(e) {
+    alert('Erreur tour Akinator : ' + e.message);
+  }
+  clLoading(false);
+}
+
+async function clRepondreAkinator(reponse) {
+  clLoading(true);
+  try {
+    const r = await fetch('/classique/player_answers', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: clSessionId, reponse})
+    });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    const data = await r.json();
+
+    if (data.proposition) {
+      document.getElementById('clAkinatorProposalPerso').textContent =
+        clGetIcon(data.proposition.personnage) + ' ' + data.proposition.personnage;
+      clShowZone('clZoneAkinatorProposition');
+      clSetBanner('🤔 Akinator fait une proposition !', 'akinator');
+    } else {
+      if (data.n_remaining !== undefined) clUpdateRemainingCount(data.n_remaining);
+      clShowZone('clZoneJoueur');
+      clSetBanner('🙋 Votre tour — posez une question !', 'joueur');
+    }
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  }
+  clLoading(false);
+}
+
+async function clConfirmerPropositionAkinator(correct) {
+  clLoading(true);
+  try {
+    const r = await fetch('/classique/confirm_akinator_proposal', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: clSessionId, correct})
+    });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    const data = await r.json();
+
+    if (correct) {
+      clAfficherFin('😮 Akinator a trouvé ! Il gagne !',
+                    'Akinator a correctement deviné votre personnage.',
+                    data.personnage_akinator);
+    } else {
+      clAfficherFin('🎉 Vous avez gagné ! Akinator a perdu !',
+                    "Akinator s'est trompé — il n'a pas trouvé votre personnage.",
+                    data.personnage_akinator);
+    }
+  } catch(e) {
+    alert('Erreur : ' + e.message);
+  }
+  clLoading(false);
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  Fin de partie classique
+// ══════════════════════════════════════════════════════════════
+function clAfficherFin(titre, message, nomAkinator) {
+  document.getElementById('clEndTitle').textContent      = titre;
+  document.getElementById('clEndMessage').textContent    = message;
+  document.getElementById('clEmojiAkinator').textContent = clGetIcon(nomAkinator || '?');
+  document.getElementById('clNomAkinator').textContent   = nomAkinator || '?';
+  clShowScreen('clEndScreen');
+}
+
 </script>
 </body>
 </html>
@@ -1988,6 +2772,172 @@ class UpdateQuestionRequest(BaseModel):
 
 class DeleteQuestionRequest(BaseModel):
     index: int
+
+
+# ── Routes Version Classique ─────────────────────────────────────────────────
+
+class StartClassiqueRequest(BaseModel):
+    personnage_joueur_index: int
+
+class PlayerAsksClassiqueRequest(BaseModel):
+    session_id: str
+    attr_indices: list
+
+class PlayerAnswersClassiqueRequest(BaseModel):
+    session_id: str
+    reponse: int
+
+class PlayerProposesClassiqueRequest(BaseModel):
+    session_id: str
+    personnage_index: int
+
+class ConfirmClassiqueRequest(BaseModel):
+    session_id: str
+    correct: bool
+
+@app.get("/classique/personnages")
+def get_personnages_classique():
+    """Retourne la liste des personnages et attributs du CSV classique."""
+    personnages, attributs, _ = charger_donnees_classique()
+    return {"personnages": personnages, "attributs": attributs}
+
+@app.post("/classique/start")
+def start_classique(request: StartClassiqueRequest):
+    """Démarre une nouvelle partie classique."""
+    personnages, attributs, donnees = charger_donnees_classique()
+    n = len(personnages)
+    if not (0 <= request.personnage_joueur_index < n):
+        raise HTTPException(status_code=400, detail="Index de personnage invalide")
+    personnage_akinator = _random.randint(0, n - 1)
+    sid = str(uuid.uuid4())
+    sessions_classique[sid] = {
+        "personnages":            personnages,
+        "attributs":              attributs,
+        "donnees":                donnees,
+        "personnage_joueur":      request.personnage_joueur_index,
+        "personnage_akinator":    personnage_akinator,
+        "remaining_akinator":     list(range(n)),
+        "attrs_poses_akinator":   set(),
+        "attrs_poses_joueur":     set(),
+        "question_akinator_courante": None,
+        "personnage_propose_akinator": None,
+    }
+    return {"session_id": sid, "personnages": personnages, "attributs": attributs}
+
+@app.post("/classique/player_asks")
+def player_asks_classique(request: PlayerAsksClassiqueRequest):
+    """Le joueur pose une question (OR logique sur les attrs) — Akinator répond Oui/Non."""
+    if request.session_id not in sessions_classique:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    session = sessions_classique[request.session_id]
+    if not request.attr_indices:
+        raise HTTPException(status_code=400, detail="Aucun attribut sélectionné")
+    attrs   = request.attr_indices
+    donnees = session["donnees"]
+    n       = len(session["personnages"])
+    aki_idx = session["personnage_akinator"]
+    reponse_oui = any(donnees[a][aki_idx] == 1 for a in attrs)
+    for a in attrs:
+        session["attrs_poses_joueur"].add(a)
+    if reponse_oui:
+        compatible = [c for c in range(n) if any(donnees[a][c] == 1 for a in attrs)]
+    else:
+        compatible = [c for c in range(n) if all(donnees[a][c] == 0 for a in attrs)]
+    return {
+        "question_text":      formater_question_classique(session["attributs"], attrs),
+        "reponse":            "Oui" if reponse_oui else "Non",
+        "compatible_indices": compatible,
+    }
+
+@app.get("/classique/akinator_turn/{session_id}")
+def akinator_turn_classique(session_id: str):
+    """Akinator choisit la meilleure question ou propose un personnage."""
+    if session_id not in sessions_classique:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    session = sessions_classique[session_id]
+    remaining   = session["remaining_akinator"]
+    n_remaining = len(remaining)
+    if n_remaining <= 2:
+        idx = remaining[0]
+        session["personnage_propose_akinator"] = idx
+        return {"type": "proposal", "personnage": session["personnages"][idx], "personnage_index": idx}
+    attrs_dispo = set(range(len(session["attributs"]))) - session["attrs_poses_akinator"]
+    if not attrs_dispo:
+        idx = remaining[0]
+        session["personnage_propose_akinator"] = idx
+        return {"type": "proposal", "personnage": session["personnages"][idx], "personnage_index": idx}
+    max_size = 3 if n_remaining > 6 else (2 if n_remaining > 3 else 1)
+    combo = meilleure_combinaison_classique(session["donnees"], remaining, attrs_dispo, max_size)
+    session["question_akinator_courante"] = combo
+    return {
+        "type":          "question",
+        "question_text": formater_question_classique(session["attributs"], combo),
+        "attr_indices":  combo,
+    }
+
+@app.post("/classique/player_answers")
+def player_answers_classique(request: PlayerAnswersClassiqueRequest):
+    """Le joueur répond Oui(1)/Non(0) — mise à jour des candidats restants d'Akinator."""
+    if request.session_id not in sessions_classique:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    session = sessions_classique[request.session_id]
+    if session["question_akinator_courante"] is None:
+        raise HTTPException(status_code=400, detail="Pas de question en cours")
+    combo       = session["question_akinator_courante"]
+    reponse_oui = bool(request.reponse)
+    donnees     = session["donnees"]
+    for a in combo:
+        session["attrs_poses_akinator"].add(a)
+    if reponse_oui:
+        session["remaining_akinator"] = [
+            c for c in session["remaining_akinator"]
+            if any(donnees[a][c] == 1 for a in combo)
+        ]
+    else:
+        session["remaining_akinator"] = [
+            c for c in session["remaining_akinator"]
+            if all(donnees[a][c] == 0 for a in combo)
+        ]
+    session["question_akinator_courante"] = None
+    n_rem = len(session["remaining_akinator"])
+    if n_rem <= 2 and n_rem > 0:
+        idx = session["remaining_akinator"][0]
+        session["personnage_propose_akinator"] = idx
+        return {
+            "tour": "akinator", "n_remaining": n_rem,
+            "proposition": {"personnage": session["personnages"][idx], "personnage_index": idx}
+        }
+    return {"tour": "joueur", "n_remaining": n_rem, "proposition": None}
+
+@app.post("/classique/player_proposes")
+def player_proposes_classique(request: PlayerProposesClassiqueRequest):
+    """Le joueur propose le personnage d'Akinator."""
+    if request.session_id not in sessions_classique:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    session = sessions_classique[request.session_id]
+    aki = session["personnage_akinator"]
+    correct = (request.personnage_index == aki)
+    return {
+        "correct":                   correct,
+        "personnage_akinator":       session["personnages"][aki],
+        "personnage_akinator_index": aki,
+        "personnage_joueur":         session["personnages"][session["personnage_joueur"]],
+    }
+
+@app.post("/classique/confirm_akinator_proposal")
+def confirm_akinator_proposal_classique(request: ConfirmClassiqueRequest):
+    """Le joueur confirme ou infirme la proposition d'Akinator."""
+    if request.session_id not in sessions_classique:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    session = sessions_classique[request.session_id]
+    nom_joueur = session["personnages"][session["personnage_joueur"]]
+    nom_aki    = session["personnages"][session["personnage_akinator"]]
+    if request.correct:
+        del sessions_classique[request.session_id]
+        return {"correct": True, "personnage_akinator": nom_aki}
+    else:
+        del sessions_classique[request.session_id]
+        return {"correct": False, "personnage_akinator": nom_aki}
 
 
 # ── Routes Admin ─────────────────────────────────────────────────────────────

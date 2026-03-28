@@ -1,0 +1,19 @@
+Attribut,Alex,Alfred,Anita,Bernard,Claire,David,Eric,Florence,Franz,Georges,Herman,Joe,Maria,Max,Olivia,Paul,Peter,Philippe,Richard,Robert,Sam,Suzanne,Tom,Victor
+est-elle une femme,0,0,1,0,1,0,0,1,0,0,0,0,1,0,1,0,0,0,0,0,0,1,0,0
+porte-t-il des lunettes,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1
+porte-t-il un chapeau,0,1,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,1,1,0,0
+a-t-il une barbe,0,0,0,1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0
+a-t-il une moustache,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+a-t-il les cheveux blonds,1,0,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,1,1,0,0,0,0,0
+a-t-il les cheveux bruns,0,1,1,1,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0,0,1,0,1,0
+a-t-il les cheveux noirs,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0
+a-t-il les cheveux roux,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,1,0,0,0,0,1,0,0
+a-t-il les cheveux blancs ou gris,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,1
+est-t-il chauve,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0
+a-t-il les cheveux longs,0,0,1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0
+a-t-il les yeux bleus,1,0,0,0,1,0,1,0,1,0,1,0,0,0,0,0,0,1,1,1,0,0,0,1
+a-t-il les yeux marron,0,1,1,1,0,1,0,1,0,1,0,1,1,1,1,1,1,0,0,0,1,1,1,0
+a-t-il un gros nez,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0
+a-t-il de grandes oreilles,0,1,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,1,0,1,0,0
+a-t-il les sourcils épais,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0
+a-t-il une bouche large,0,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,1,0,0
