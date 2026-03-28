@@ -764,7 +764,6 @@ def get_interface():
     filter: grayscale(1) blur(1px);
     pointer-events: auto;   /* peut être rétabli */
   }
-  .cl-perso-icon { font-size: 1.6em; display: block; margin-bottom: 3px; }
   .cl-perso-card .cl-x-badge {
     position: absolute; top: 2px; right: 4px;
     font-size: .75em; color: #e74c3c; font-weight: 900;
@@ -1320,8 +1319,7 @@ def get_interface():
     <div class="reveal-row">
       <div class="reveal-card">
         <div class="label">Personnage d'Akinator</div>
-        <div class="big-emoji" id="clEmojiAkinator">🤖</div>
-        <div class="name" id="clNomAkinator"></div>
+        <div class="name" id="clNomAkinator" style="font-size:1.5em;font-weight:800;margin-top:6px;"></div>
       </div>
     </div>
     <div class="row" style="justify-content:center;gap:12px;">
@@ -2276,17 +2274,6 @@ var clPersonnages = [];
 var clAttributs   = [];
 var clAttrsChecked = new Set();
 
-var CL_PERSO_ICONS = {
-  'alex':'🧑', 'alfred':'👴', 'anita':'👩', 'bernard':'🧔', 'claire':'👱‍♀️',
-  'david':'🧑‍🦰', 'eric':'🤓', 'florence':'👩‍🦱', 'franz':'🧓', 'georges':'👨‍🦲',
-  'herman':'😄', 'joe':'🎩', 'maria':'👩‍🦱', 'max':'🧐', 'olivia':'👩‍🦰',
-  'paul':'🤔', 'peter':'🙂', 'philippe':'🎩', 'richard':'🧔', 'robert':'👴',
-  'sam':'😎', 'suzanne':'👩', 'tom':'😶', 'victor':'🕵️',
-};
-function clGetIcon(name) {
-  return CL_PERSO_ICONS[name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')] || '🧑';
-}
-
 function clLoading(on) {
   var el = document.getElementById('clLoadingOverlay');
   if (el) el.classList.toggle('active', on);
@@ -2583,8 +2570,7 @@ async function clTourAkinator() {
       clShowZone('clZoneAkinatorQuestion');
       clSetBanner('🤖 Akinator vous pose une question !', 'akinator');
     } else {
-      document.getElementById('clAkinatorProposalPerso').textContent =
-        clGetIcon(data.personnage) + ' ' + data.personnage;
+      document.getElementById('clAkinatorProposalPerso').textContent = data.personnage;
       clShowZone('clZoneAkinatorProposition');
       clSetBanner('🤔 Akinator fait une proposition !', 'akinator');
     }
@@ -2606,8 +2592,7 @@ async function clRepondreAkinator(reponse) {
     const data = await r.json();
 
     if (data.proposition) {
-      document.getElementById('clAkinatorProposalPerso').textContent =
-        clGetIcon(data.proposition.personnage) + ' ' + data.proposition.personnage;
+      document.getElementById('clAkinatorProposalPerso').textContent = data.proposition.personnage;
       clShowZone('clZoneAkinatorProposition');
       clSetBanner('🤔 Akinator fait une proposition !', 'akinator');
     } else {
@@ -2652,10 +2637,9 @@ async function clConfirmerPropositionAkinator(correct) {
 //  Fin de partie classique
 // ══════════════════════════════════════════════════════════════
 function clAfficherFin(titre, message, nomAkinator) {
-  document.getElementById('clEndTitle').textContent      = titre;
-  document.getElementById('clEndMessage').textContent    = message;
-  document.getElementById('clEmojiAkinator').textContent = clGetIcon(nomAkinator || '?');
-  document.getElementById('clNomAkinator').textContent   = nomAkinator || '?';
+  document.getElementById('clEndTitle').textContent   = titre;
+  document.getElementById('clEndMessage').textContent = message;
+  document.getElementById('clNomAkinator').textContent = nomAkinator || '?';
   clShowScreen('clEndScreen');
 }
 
