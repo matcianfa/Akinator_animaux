@@ -64,11 +64,12 @@ def meilleure_combinaison_classique(donnees, remaining, attrs_disponibles, max_s
     n = len(remaining)
     if n == 0:
         return []
-    best_combo, best_score = None, float('inf')
     attrs_list = list(attrs_disponibles)
+    _random.shuffle(attrs_list)          # ordre aléatoire → variété à score égal
     effective_max = min(max_size, len(attrs_list))
     if n <= 4:
         effective_max = min(2, effective_max)
+    best_combo, best_score = None, float('inf')
     for size in range(1, effective_max + 1):
         for combo in combinations(attrs_list, size):
             count_yes = sum(1 for c in remaining if any(donnees[a][c] == 1 for a in combo))
@@ -662,6 +663,56 @@ def get_interface():
   }
   .admin-input:focus { outline:none; border-color: var(--primary); }
 
+  /* ── Panneau technique CLASSIQUE ── */
+  #adminClassiquePanel {
+    display: none; position: fixed; inset: 0; z-index: 400;
+    background: rgba(0,0,0,.5); align-items: flex-start;
+    justify-content: center; padding-top: 60px; overflow-y: auto;
+  }
+  #adminClassiquePanel.active { display: flex; }
+  #adminClassiqueBox {
+    background: white; border-radius: 18px; padding: 28px;
+    width: 95%; max-width: 960px; margin-bottom: 40px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  }
+  #adminClassiqueBox h2 { color: #1e7a55; margin-bottom: 6px; }
+  .cl-admin-perso-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px; margin: 14px 0;
+  }
+  .cl-admin-perso-card {
+    background: #f0fff8; border: 2px solid #b2e8d4; border-radius: 10px;
+    padding: 10px 6px; text-align: center; cursor: pointer;
+    font-size: .88em; font-weight: 600; color: #1e7a55; transition: all .15s;
+  }
+  .cl-admin-perso-card:hover { border-color: #43b89c; background: #c8f5e4; }
+  .cl-admin-perso-card.cl-admin-selected {
+    border-color: #1e7a55; background: #a0e8cc; box-shadow: 0 0 0 3px #43b89c44;
+  }
+  .cl-admin-attr-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 8px; margin: 14px 0;
+  }
+  .cl-admin-attr-item {
+    display: flex; align-items: center; gap: 10px;
+    border-radius: 10px; padding: 10px 14px; cursor: pointer;
+    transition: all .15s; font-size: .9em; font-weight: 600;
+    border: 2px solid #b2e8d4;
+  }
+  .cl-admin-attr-item.val-1 { background: #c8f5e4; border-color: #43b89c; color: #1e7a55; }
+  .cl-admin-attr-item.val-0 { background: #fff0f0; border-color: #f5a0a0; color: #b03030; }
+  .cl-admin-attr-badge {
+    min-width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-weight: 900;
+  }
+  .val-1 .cl-admin-attr-badge { background: #43b89c; color: white; }
+  .val-0 .cl-admin-attr-badge { background: #e74c3c; color: white; }
+  .cl-admin-section {
+    background: #f8fffe; border-radius: 12px; padding: 18px; margin-top: 18px;
+    border: 1px solid #d0f0e4;
+  }
+  .cl-admin-section h3 { color: #1e7a55; margin-bottom: 10px; }
+
   /* ═══════════════════════════════════════
      BOUTON VERSION CLASSIQUE
   ═══════════════════════════════════════ */
@@ -911,6 +962,67 @@ def get_interface():
         </button>
       </div>
       <div id="adminSaveMsg" style="margin-top:12px;display:none;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     PANNEAU TECHNIQUE CLASSIQUE
+══════════════════════════════════════════ -->
+<div id="adminClassiquePanel">
+  <div id="adminClassiqueBox">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <h2>⚙️ Technique — Version Classique</h2>
+      <button class="btn-outline" onclick="toggleAdminClassique()"
+              style="padding:8px 16px;font-size:.9em;color:#1e7a55;border-color:#1e7a55;">
+        ✕ Fermer
+      </button>
+    </div>
+    <p style="color:#888;font-size:.9em">
+      Cliquez sur un personnage pour modifier ses attributs ou son nom.
+      Le fichier <code>qui_est_ce_classique.csv</code> sera mis à jour.
+    </p>
+
+    <div class="cl-admin-section">
+      <h3>🎭 Personnages — cliquez pour modifier</h3>
+      <div id="clAdminPersoGrid" class="cl-admin-perso-grid">
+        <p style="color:#aaa">Chargement…</p>
+      </div>
+    </div>
+
+    <div class="cl-admin-section" id="clAdminEditSection"
+         style="display:none;border:2px solid #43b89c;">
+      <h3>✏️ Modifier :
+        <span id="clAdminEditBadge" style="color:#43b89c;font-weight:800;"></span>
+      </h3>
+
+      <div style="margin-bottom:16px;">
+        <label style="font-weight:700;font-size:.9em;color:#555;display:block;margin-bottom:6px;">
+          Nom du personnage :
+        </label>
+        <input type="text" id="clAdminNomInput" class="admin-input"
+               placeholder="Nom du personnage…" maxlength="40"
+               style="border-color:#43b89c;max-width:340px;" />
+      </div>
+
+      <p style="font-weight:700;font-size:.9em;color:#555;margin-bottom:8px;">
+        Attributs — cliquez pour basculer 0 ↔ 1 :
+      </p>
+      <div id="clAdminAttrGrid" class="cl-admin-attr-grid"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  margin-top:20px;flex-wrap:wrap;gap:10px;">
+        <button onclick="clAdminAnnuler()"
+                style="background:white;color:#888;border:2px solid #ccc;border-radius:10px;
+                       padding:10px 20px;font-size:.95em;font-weight:600;cursor:pointer;">
+          🔄 Annuler les modifications
+        </button>
+        <button class="btn-success" onclick="clAdminSauvegarder()"
+                style="padding:10px 24px;">
+          💾 Enregistrer les modifications
+        </button>
+      </div>
+      <div id="clAdminSaveMsg" style="margin-top:12px;display:none;"></div>
     </div>
   </div>
 </div>
@@ -1799,11 +1911,144 @@ function afficherMsg(elId, texte, succes) {
 }
 
 async function toggleAdmin() {
+  if (clCurrentMode) { toggleAdminClassique(); return; }
   const panel = document.getElementById('adminPanel');
   const isOpen = panel.classList.toggle('active');
-  if (isOpen && !adminLoaded) {
-    await chargerAdmin();
-    adminLoaded = true;
+  if (isOpen && !adminLoaded) { await chargerAdmin(); adminLoaded = true; }
+}
+
+function toggleAdminClassique() {
+  const panel = document.getElementById('adminClassiquePanel');
+  const isOpen = panel.classList.toggle('active');
+  if (isOpen) clAdminCharger();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PANNEAU ADMIN CLASSIQUE
+// ══════════════════════════════════════════════════════════════
+var clAdminData        = null;
+var clAdminPersoSel    = null;
+var clAdminValeursCopy = [];
+
+async function clAdminCharger() {
+  try {
+    const r = await fetch('/classique/admin/data');
+    if (!r.ok) throw new Error('Erreur ' + r.status);
+    clAdminData = await r.json();
+    clAdminBuildPersoGrid();
+    document.getElementById('clAdminEditSection').style.display = 'none';
+    clAdminPersoSel = null;
+  } catch(e) {
+    document.getElementById('clAdminPersoGrid').innerHTML =
+      '<p style="color:red">Erreur chargement : ' + e.message + '</p>';
+  }
+}
+
+function clAdminBuildPersoGrid() {
+  const grid = document.getElementById('clAdminPersoGrid');
+  grid.innerHTML = '';
+  clAdminData.personnages.forEach((nom, i) => {
+    const card = document.createElement('div');
+    card.className = 'cl-admin-perso-card';
+    card.id = 'clAdminPC-' + i;
+    card.textContent = nom;
+    card.onclick = () => clAdminSelectionnerPersonnage(i);
+    grid.appendChild(card);
+  });
+}
+
+function clAdminSelectionnerPersonnage(idx) {
+  document.querySelectorAll('.cl-admin-perso-card')
+          .forEach(c => c.classList.remove('cl-admin-selected'));
+  document.getElementById('clAdminPC-' + idx).classList.add('cl-admin-selected');
+  clAdminPersoSel    = idx;
+  clAdminValeursCopy = clAdminData.donnees.map(row => row[idx]);
+  document.getElementById('clAdminEditBadge').textContent = clAdminData.personnages[idx];
+  document.getElementById('clAdminNomInput').value        = clAdminData.personnages[idx];
+  clAdminBuildAttrGrid();
+  const sec = document.getElementById('clAdminEditSection');
+  sec.style.display = 'block';
+  sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('clAdminSaveMsg').style.display = 'none';
+}
+
+function clAdminBuildAttrGrid() {
+  const grid = document.getElementById('clAdminAttrGrid');
+  grid.innerHTML = '';
+  clAdminData.attributs.forEach((attr, i) => {
+    const val = clAdminValeursCopy[i];
+    const div = document.createElement('div');
+    div.className = 'cl-admin-attr-item val-' + val;
+    div.id = 'clAdminAttr-' + i;
+    div.innerHTML = '<span class="cl-admin-attr-badge">' + val + '</span><span>' + attr + '</span>';
+    div.onclick = () => clAdminToggleAttr(i);
+    grid.appendChild(div);
+  });
+}
+
+function clAdminToggleAttr(i) {
+  clAdminValeursCopy[i] = clAdminValeursCopy[i] === 1 ? 0 : 1;
+  const val = clAdminValeursCopy[i];
+  const div = document.getElementById('clAdminAttr-' + i);
+  div.className = 'cl-admin-attr-item val-' + val;
+  div.querySelector('.cl-admin-attr-badge').textContent = val;
+}
+
+function clAdminAnnuler() {
+  if (clAdminPersoSel === null) return;
+  clAdminValeursCopy = clAdminData.donnees.map(row => row[clAdminPersoSel]);
+  document.getElementById('clAdminNomInput').value = clAdminData.personnages[clAdminPersoSel];
+  clAdminBuildAttrGrid();
+  document.getElementById('clAdminSaveMsg').style.display = 'none';
+}
+
+async function clAdminSauvegarder() {
+  if (clAdminPersoSel === null) return;
+  const nouveauNom = document.getElementById('clAdminNomInput').value.trim();
+  if (!nouveauNom) { alert('Le nom ne peut pas être vide.'); return; }
+
+  const ancienNom = clAdminData.personnages[clAdminPersoSel];
+  const changements = clAdminData.attributs
+    .map((attr, i) => ({ attr, ancien: clAdminData.donnees[i][clAdminPersoSel], nouveau: clAdminValeursCopy[i] }))
+    .filter(x => x.ancien !== x.nouveau);
+
+  var NL = String.fromCharCode(10);
+  var lignes = ['Confirmer les modifications pour ' + ancienNom + ' ?'];
+  if (nouveauNom !== ancienNom) lignes.push('Nom : ' + ancienNom + ' -> ' + nouveauNom);
+  changements.forEach(function(x) { lignes.push(x.attr + ' : ' + x.ancien + ' -> ' + x.nouveau); });
+  if (changements.length === 0 && nouveauNom === ancienNom) {
+    alert('Aucune modification detectee.'); return;
+  }
+  if (!confirm(lignes.join(NL))) return;
+
+  try {
+    const r = await fetch('/classique/admin/update_personnage', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index: clAdminPersoSel, nom: nouveauNom, valeurs: clAdminValeursCopy })
+    });
+    if (!r.ok) throw new Error((await r.json()).detail);
+
+    clAdminData.personnages[clAdminPersoSel] = nouveauNom;
+    clAdminData.donnees.forEach((row, i) => { row[clAdminPersoSel] = clAdminValeursCopy[i]; });
+    clAdminBuildPersoGrid();
+    document.getElementById('clAdminPC-' + clAdminPersoSel).classList.add('cl-admin-selected');
+    document.getElementById('clAdminEditBadge').textContent = nouveauNom;
+
+    const msgEl = document.getElementById('clAdminSaveMsg');
+    msgEl.style.cssText = 'display:block;padding:12px 16px;border-radius:10px;margin-top:12px;' +
+      'font-weight:600;background:#e8f8f0;color:#2e7d52;';
+    msgEl.textContent = '✅ ' + nouveauNom + ' mis à jour avec succès !';
+    setTimeout(() => { msgEl.style.display = 'none'; }, 4000);
+
+    if (clPersonnages && clPersonnages[clAdminPersoSel] !== undefined)
+      clPersonnages[clAdminPersoSel] = nouveauNom;
+  } catch(e) {
+    const msgEl = document.getElementById('clAdminSaveMsg');
+    msgEl.style.cssText = 'display:block;padding:12px 16px;border-radius:10px;margin-top:12px;' +
+      'font-weight:600;background:#fdecea;color:#c62828;';
+    msgEl.textContent = '❌ Erreur : ' + e.message;
+    setTimeout(() => { msgEl.style.display = 'none'; }, 5000);
   }
 }
 
@@ -2938,6 +3183,56 @@ def confirm_akinator_proposal_classique(request: ConfirmClassiqueRequest):
     else:
         del sessions_classique[request.session_id]
         return {"correct": False, "personnage_akinator": nom_aki}
+
+
+# ── Routes Admin Classique ───────────────────────────────────────────────────
+
+class UpdatePersonnageClassiqueRequest(BaseModel):
+    index:   int
+    nom:     str
+    valeurs: list   # liste de int (0 ou 1), une valeur par attribut
+
+@app.get("/classique/admin/data")
+def classique_admin_get_data():
+    """Retourne personnages, attributs ET matrice pour le panneau admin classique."""
+    personnages, attributs, donnees = charger_donnees_classique()
+    # donnees[attr_idx][perso_idx] → on transpose pour l'affichage
+    return {
+        "personnages": personnages,
+        "attributs":   attributs,
+        "donnees":     donnees,   # liste de listes : donnees[attr][perso]
+    }
+
+@app.put("/classique/admin/update_personnage")
+def classique_admin_update_personnage(request: UpdatePersonnageClassiqueRequest):
+    """Met à jour le nom et les valeurs d'un personnage dans le CSV classique."""
+    personnages, attributs, donnees = charger_donnees_classique()
+    n = len(personnages)
+    if not (0 <= request.index < n):
+        raise HTTPException(status_code=400, detail="Index de personnage invalide")
+    if len(request.valeurs) != len(attributs):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Il faut {len(attributs)} valeurs, reçu {len(request.valeurs)}"
+        )
+    for v in request.valeurs:
+        if v not in (0, 1):
+            raise HTTPException(status_code=400, detail=f"Valeur invalide : {v} (attendu 0 ou 1)")
+
+    # Appliquer les modifications
+    personnages[request.index] = request.nom.strip()
+    for attr_idx, val in enumerate(request.valeurs):
+        donnees[attr_idx][request.index] = val
+
+    # Réécrire le CSV
+    import csv as _csv
+    with open(CSV_CLASSIQUE_PATH, 'w', newline='', encoding='utf-8') as f:
+        writer = _csv.writer(f)
+        writer.writerow(['Attribut'] + personnages)
+        for attr_idx, attr in enumerate(attributs):
+            writer.writerow([attr] + donnees[attr_idx])
+
+    return {"ok": True, "nom": personnages[request.index]}
 
 
 # ── Routes Admin ─────────────────────────────────────────────────────────────
