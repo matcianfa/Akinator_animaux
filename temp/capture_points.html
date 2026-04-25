@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Apple Pencil – Capture de points</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; touch-action: none; }
+  body { font-family: -apple-system, sans-serif; background: #f2f2f7; height: 100vh; display: flex; flex-direction: column; }
+
+  #toolbar {
+    display: flex; gap: 8px; padding: 10px 12px;
+    background: #fff; border-bottom: 1px solid #e0e0e0;
+    flex-wrap: wrap; align-items: center;
+  }
+  #toolbar span { font-size: 13px; color: #666; margin-right: auto; }
+
+  button {
+    padding: 8px 16px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  #btn-clear   { background: #ff3b30; color: #fff; }
+  #btn-csv     { background: #34c759; color: #fff; }
+  #btn-json    { background: #007aff; color: #fff; }
+  #btn-new     { background: #ff9500; color: #fff; }
+
+  #canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; background: #fff; cursor: crosshair; }
+
+  #counter {
+    position: absolute; top: 10px; right: 12px;
+    background: rgba(0,0,0,0.55); color: #fff;
+    font-size: 13px; padding: 4px 10px; border-radius: 20px;
+    pointer-events: none;
+  }
+
+  #modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: 10;
+    align-items: center; justify-content: center;
+  }
+  #modal-overlay.open { display: flex; }
+  #modal {
+    background: #fff; border-radius: 14px;
+    padding: 20px; width: 90%; max-width: 480px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  #modal h2 { font-size: 16px; font-weight: 600; }
+  #modal textarea {
+    width: 100%; height: 180px; font-family: monospace;
+    font-size: 12px; border: 1px solid #ccc; border-radius: 8px;
+    padding: 8px; resize: none;
+  }
+  #modal-btns { display: flex; gap: 8px; }
+  #btn-copy   { background: #007aff; color: #fff; flex: 1; }
+  #btn-close  { background: #e5e5ea; color: #000; flex: 1; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span id="info">Dessinez avec l'Apple Pencil</span>
+  <button id="btn-new">+ Trait</button>
+  <button id="btn-clear">Effacer</button>
+  <button id="btn-csv">CSV</button>
+  <button id="btn-json">JSON</button>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
+  <div id="counter">0 points</div>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal">
+    <h2 id="modal-title">Export</h2>
+    <textarea id="modal-text" readonly></textarea>
+    <div id="modal-btns">
+      <button id="btn-copy">Copier</button>
+      <button id="btn-close">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const counter = document.getElementById('counter');
+
+let strokes = [];       // liste de traits [ [{x,y,p,t}, ...], ... ]
+let current = null;     // trait en cours
+let drawing = false;
+let totalPoints = 0;
+
+function resize() {
+  const wrap = document.getElementById('canvas-wrap');
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  redraw();
+}
+window.addEventListener('resize', resize);
+resize();
+
+function redraw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#1a1a2e';
+  ctx.lineJoin = 'round';
+  ctx.lineCap  = 'round';
+  strokes.forEach(stroke => {
+    if (stroke.length < 2) return;
+    ctx.beginPath();
+    stroke.forEach((pt, i) => {
+      ctx.lineWidth = Math.max(0.5, pt.p * 4);
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else { ctx.lineTo(pt.x, pt.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(pt.x, pt.y); }
+    });
+  });
+}
+
+function getPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: parseFloat(((e.clientX - r.left) * (canvas.width  / r.width)).toFixed(2)),
+    y: parseFloat(((e.clientY - r.top)  * (canvas.height / r.height)).toFixed(2)),
+    p: parseFloat((e.pressure || 0.5).toFixed(3)),
+    t: parseFloat((e.timeStamp / 1000).toFixed(4))
+  };
+}
+
+canvas.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'pen') return;
+  e.preventDefault();
+  drawing = true;
+  current = [getPos(e)];
+  strokes.push(current);
+  totalPoints++;
+  counter.textContent = totalPoints + ' points';
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (!drawing || e.pointerType !== 'pen' || !(e.buttons & 1)) return;
+  e.preventDefault();
+  const pt = getPos(e);
+  current.push(pt);
+  totalPoints++;
+  counter.textContent = totalPoints + ' points';
+
+  // Dessin incrémental
+  if (current.length >= 2) {
+    const prev = current[current.length - 2];
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth   = Math.max(0.5, pt.p * 4);
+    ctx.lineJoin    = 'round';
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(prev.x, prev.y);
+    ctx.lineTo(pt.x, pt.y);
+    ctx.stroke();
+  }
+});
+
+canvas.addEventListener('pointerup',     e => { if (e.pointerType === 'pen') drawing = false; });
+canvas.addEventListener('pointercancel', e => { if (e.pointerType === 'pen') drawing = false; });
+
+// Nouveau trait sans effacer
+document.getElementById('btn-new').addEventListener('click', () => {
+  current = null; drawing = false;
+});
+
+// Effacer tout
+document.getElementById('btn-clear').addEventListener('click', () => {
+  strokes = []; current = null; drawing = false; totalPoints = 0;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  counter.textContent = '0 points';
+});
+
+// Export CSV
+document.getElementById('btn-csv').addEventListener('click', () => {
+  let lines = ['stroke,index,x,y,pressure,time_s'];
+  strokes.forEach((stroke, si) =>
+    stroke.forEach((pt, pi) =>
+      lines.push(`${si},${pi},${pt.x},${pt.y},${pt.p},${pt.t}`)
+    )
+  );
+  showModal('Export CSV', lines.join('\n'));
+});
+
+// Export JSON
+document.getElementById('btn-json').addEventListener('click', () => {
+  const data = strokes.map((stroke, si) =>
+    stroke.map(pt => ({ stroke: si, x: pt.x, y: pt.y, pressure: pt.p, time_s: pt.t }))
+  ).flat();
+  showModal('Export JSON', JSON.stringify(data, null, 2));
+});
+
+// Modal
+function showModal(title, text) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-text').value = text;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+document.getElementById('btn-close').addEventListener('click', () => {
+  document.getElementById('modal-overlay').classList.remove('open');
+});
+document.getElementById('btn-copy').addEventListener('click', () => {
+  const ta = document.getElementById('modal-text');
+  ta.select();
+  document.execCommand('copy');
+  document.getElementById('btn-copy').textContent = 'Copié !';
+  setTimeout(() => document.getElementById('btn-copy').textContent = 'Copier', 1500);
+});
+</script>
+</body>
+</html>
